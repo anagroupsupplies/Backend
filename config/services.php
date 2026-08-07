@@ -2,6 +2,17 @@
 
 return [
 
+    'firebase' => [
+        'project_id' => env('FIREBASE_PROJECT_ID', 'anagroupsupplies'),
+        'admin_emails' => array_filter(array_map('trim', explode(',', env('ADMIN_EMAILS', '')))),
+    ],
+
+    'deepseek' => [
+        'api_key' => env('DEEPSEEK_API_KEY'),
+        'base_url' => env('DEEPSEEK_BASE_URL', 'https://api.deepseek.com'),
+        'model' => env('DEEPSEEK_MODEL', 'deepseek-v4-flash'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services

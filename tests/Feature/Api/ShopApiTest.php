@@ -1,0 +1,49 @@
+<?php
+
+use App\Http\Middleware\AuthenticateFirebase;
+use App\Models\CartItem;
+use App\Models\Category;
+use App\Models\Order;
+use App\Models\Product;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+uses(RefreshDatabase::class);
+
+beforeEach(function (): void {
+    $this->withoutMiddleware(AuthenticateFirebase::class);
+});
+
+test('catalog endpoints expose active products in the frontend shape', function () {
+    $category = Category::create(['name' => 'Shoes', 'slug' => 'shoes']);
+    $product = Product::create(['category_id' => $category->id, 'name' => 'Running Shoe', 'slug' => 'running-shoe', 'price' => 45000, 'stock' => 5]);
+
+    $this->getJson('/api/v1/products')
+        ->assertOk()
+        ->assertJsonPath('data.0.id', (string) $product->id)
+        ->assertJsonPath('data.0.category', 'Shoes')
+        ->assertJsonPath('data.0.price', 45000);
+});
+
+test('checkout calculates totals from mysql, snapshots items, decrements stock, and clears the cart', function () {
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey', 'price' => 50000, 'stock' => 4]);
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'L', 'quantity' => 2]);
+    $this->actingAs($user);
+
+    $response = $this->postJson('/api/v1/checkout', ['shippingDetails' => [
+        'fullName' => 'Test Customer', 'email' => 'customer@example.com', 'phone' => '255700000000',
+        'streetAddress' => '1 Test Street', 'city' => 'Dar es Salaam', 'state' => 'Dar es Salaam',
+        'postalCode' => '11101', 'country' => 'Tanzania',
+    ]]);
+
+    $response->assertCreated()->assertJsonPath('data.total', 100000)->assertJsonPath('data.items.0.selectedSize', 'L');
+    expect(Order::first()->items)->toHaveCount(1)
+        ->and($product->fresh()->stock)->toBe(2)
+        ->and(CartItem::count())->toBe(0);
+});
+
+test('a customer cannot access administrator routes', function () {
+    $this->actingAs(User::factory()->create());
+    $this->getJson('/api/v1/admin/dashboard')->assertForbidden();
+});
