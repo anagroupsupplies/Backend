@@ -22,18 +22,22 @@ Route::prefix('v1')->group(function (): void {
     Route::post('ai/chat', AiChatController::class)->middleware('throttle:20,1');
     Route::post('auth/register', [AuthController::class, 'register'])->middleware('throttle:6,1');
     Route::post('auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+    Route::post('auth/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:5,1');
+    Route::post('auth/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:5,1');
+    Route::get('auth/email/verify/{user}/{hash}', [AuthController::class, 'verifyEmail'])->middleware(['signed', 'throttle:10,1'])->name('verification.verify');
 
     Route::middleware('firebase')->group(function (): void {
         Route::post('auth/session', [AuthController::class, 'session']);
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('me', [AuthController::class, 'me']);
         Route::patch('me', [AuthController::class, 'update']);
+        Route::post('auth/email/verification-notification', [AuthController::class, 'resendVerification'])->middleware('throttle:3,1');
         Route::apiResource('cart', CartController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::apiResource('wishlist', WishlistController::class)->only(['index', 'store', 'destroy']);
         Route::post('wishlist/{wishlistItem}/move-to-cart', [WishlistController::class, 'moveToCart']);
         Route::get('orders', [OrderController::class, 'index']);
         Route::get('orders/{order}', [OrderController::class, 'show']);
-        Route::post('checkout', [OrderController::class, 'store']);
+        Route::post('checkout', [OrderController::class, 'store'])->middleware('verified.api');
         Route::post('products/{product}/reviews', [ReviewController::class, 'store']);
         Route::post('analytics', [AdminController::class, 'track']);
 

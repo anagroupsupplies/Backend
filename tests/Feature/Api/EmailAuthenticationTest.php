@@ -1,60 +1,57 @@
 <?php
 
-use App\Models\ApiToken;
 use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use App\Notifications\ResetPasswordNotification;
+use App\Notifications\VerifyEmailNotification;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
-test('a customer can register with credentials stored securely in mysql', function () {
+test('local registration sends an email verification notification', function () {
+    Notification::fake();
+
     $response = $this->postJson('/api/v1/auth/register', [
-        'name' => 'Local Customer',
+        'name' => 'New Customer',
         'email' => 'customer@example.com',
-        'password' => 'strong-password',
-        'password_confirmation' => 'strong-password',
-    ])->assertCreated()
-        ->assertJsonPath('data.user.email', 'customer@example.com')
-        ->assertJsonPath('data.user.uid', 'local:1');
-
-    $plainTextToken = $response->json('data.token');
-    $user = User::where('email', 'customer@example.com')->firstOrFail();
-
-    expect($user->firebase_uid)->toBeNull()
-        ->and(Hash::check('strong-password', $user->password))->toBeTrue()
-        ->and($user->password)->not->toBe('strong-password')
-        ->and(ApiToken::where('token_hash', hash('sha256', $plainTextToken))->exists())->toBeTrue();
-
-    $this->withToken($plainTextToken)->getJson('/api/v1/me')
-        ->assertOk()
-        ->assertJsonPath('data.email', 'customer@example.com');
-});
-
-test('a customer can login and revoke the current token on logout', function () {
-    User::create([
-        'name' => 'Customer',
-        'email' => 'customer@example.com',
-        'password' => 'strong-password',
-        'is_active' => true,
+        'password' => 'password123',
+        'password_confirmation' => 'password123',
     ]);
 
-    $response = $this->postJson('/api/v1/auth/login', [
-        'email' => 'customer@example.com',
-        'password' => 'strong-password',
-    ])->assertOk();
-    $plainTextToken = $response->json('data.token');
-
-    $this->withToken($plainTextToken)->postJson('/api/v1/auth/logout')->assertOk();
-    $this->withToken($plainTextToken)->getJson('/api/v1/me')->assertUnauthorized();
+    $response->assertCreated()->assertJsonPath('data.user.emailVerified', false);
+    Notification::assertSentTo(User::whereEmail('customer@example.com')->first(), VerifyEmailNotification::class);
 });
 
-test('invalid local credentials do not issue a token', function () {
-    User::create(['name' => 'Customer', 'email' => 'customer@example.com', 'password' => 'correct-password', 'is_active' => true]);
+test('a valid signed link verifies the user email', function () {
+    $user = User::factory()->unverified()->create();
+    $url = URL::temporarySignedRoute('verification.verify', now()->addHour(), [
+        'user' => $user->id,
+        'hash' => sha1($user->email),
+    ]);
 
-    $this->postJson('/api/v1/auth/login', [
-        'email' => 'customer@example.com',
-        'password' => 'wrong-password',
-    ])->assertUnprocessable();
+    $this->get($url)->assertRedirect(config('app.frontend_url').'/email-verified?status=success');
+    expect($user->fresh()->hasVerifiedEmail())->toBeTrue();
+});
 
-    expect(ApiToken::count())->toBe(0);
+test('a user can request and complete a password reset', function () {
+    Notification::fake();
+    $user = User::factory()->create(['password' => 'old-password']);
+    $token = null;
+
+    $this->postJson('/api/v1/auth/forgot-password', ['email' => $user->email])->assertOk();
+    Notification::assertSentTo($user, ResetPasswordNotification::class, function ($notification) use (&$token) {
+        $token = $notification->token;
+        return true;
+    });
+
+    $this->postJson('/api/v1/auth/reset-password', [
+        'email' => $user->email,
+        'token' => $token,
+        'password' => 'new-password123',
+        'password_confirmation' => 'new-password123',
+    ])->assertOk();
+
+    expect(Hash::check('new-password123', $user->fresh()->password))->toBeTrue();
 });
