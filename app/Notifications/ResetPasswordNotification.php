@@ -24,10 +24,7 @@ class ResetPasswordNotification extends Notification
 
         return (new MailMessage)
             ->subject('Reset your Antenkayume Shop password')
-            ->greeting('Hello '.$notifiable->name.',')
-            ->line('We received a request to reset your password.')
-            ->action('Reset password', $url)
-            ->line('This password-reset link expires in '.config('auth.passwords.users.expire').' minutes.')
-            ->line('If you did not request a password reset, no action is required.');
+            ->view('emails.reset-password', ['customer' => $notifiable, 'url' => $url, 'expires' => config('auth.passwords.users.expire')])
+            ->text('emails.text.reset-password', ['customer' => $notifiable, 'url' => $url, 'expires' => config('auth.passwords.users.expire')]);
     }
 }

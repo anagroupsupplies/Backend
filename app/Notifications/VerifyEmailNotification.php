@@ -25,9 +25,7 @@ class VerifyEmailNotification extends Notification
 
         return (new MailMessage)
             ->subject('Verify your Antenkayume Shop account')
-            ->greeting('Welcome to Antenkayume Shop!')
-            ->line('Please verify your email address to secure your account and continue to checkout.')
-            ->action('Verify email address', $url)
-            ->line('This verification link expires in 60 minutes. If you did not create this account, no action is required.');
+            ->view('emails.verify-email', ['customer' => $notifiable, 'url' => $url])
+            ->text('emails.text.verify-email', ['customer' => $notifiable, 'url' => $url]);
     }
 }

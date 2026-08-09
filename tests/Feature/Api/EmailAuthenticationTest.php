@@ -55,3 +55,13 @@ test('a user can request and complete a password reset', function () {
 
     expect(Hash::check('new-password123', $user->fresh()->password))->toBeTrue();
 });
+
+test('authentication emails use the Antenkayume branded templates', function () {
+    $user = User::factory()->make(['name' => 'Antenka Customer']);
+    $verification = view('emails.verify-email', ['customer' => $user, 'url' => 'https://example.com/verify'])->render();
+    $reset = view('emails.reset-password', ['customer' => $user, 'url' => 'https://example.com/reset', 'expires' => 60])->render();
+
+    expect($verification)->toContain('Antenkayume')->toContain('Verify my email')
+        ->and($reset)->toContain('Antenkayume')->toContain('Choose a new password')
+        ->and($verification)->not->toContain('Laravel');
+});
