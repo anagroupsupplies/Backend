@@ -54,9 +54,12 @@ class AuthenticateFirebase
         ]);
         if ($isNewUser) {
             $user->is_active = true;
-            $user->role = in_array(strtolower($email), array_map('strtolower', config('services.firebase.admin_emails')), true)
-                ? 'admin'
-                : 'user';
+            $user->role = 'user';
+        }
+        if (in_array(strtolower($email), array_map('strtolower', config('services.firebase.master_admin_emails')), true)) {
+            $user->role = 'master';
+        } elseif ($isNewUser && in_array(strtolower($email), array_map('strtolower', config('services.firebase.admin_emails')), true)) {
+            $user->role = 'admin';
         }
         $user->save();
 

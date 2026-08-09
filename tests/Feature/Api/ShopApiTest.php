@@ -47,3 +47,21 @@ test('a customer cannot access administrator routes', function () {
     $this->actingAs(User::factory()->create());
     $this->getJson('/api/v1/admin/dashboard')->assertForbidden();
 });
+
+test('a normal administrator can manage shop operations but not master resources', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $this->actingAs($admin);
+
+    $this->getJson('/api/v1/admin/dashboard')->assertOk()->assertJsonMissingPath('data.usersCount');
+    $this->getJson('/api/v1/admin/orders')->assertOk();
+    $this->getJson('/api/v1/admin/users')->assertForbidden();
+    $this->putJson('/api/v1/admin/settings', ['whatsappNumber' => '255700000000'])->assertForbidden();
+});
+
+test('a master administrator receives full metrics and controls users', function () {
+    $master = User::factory()->create(['role' => 'master']);
+    $this->actingAs($master);
+
+    $this->getJson('/api/v1/admin/dashboard')->assertOk()->assertJsonPath('data.usersCount', 1);
+    $this->getJson('/api/v1/admin/users')->assertOk()->assertJsonPath('data.0.role', 'master');
+});

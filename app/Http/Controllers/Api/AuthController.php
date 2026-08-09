@@ -26,7 +26,9 @@ class AuthController extends Controller
             'name' => $data['name'] ?? Str::before($email, '@'),
             'email' => $email,
             'password' => $data['password'],
-            'role' => in_array($email, array_map('strtolower', config('services.firebase.admin_emails')), true) ? 'admin' : 'user',
+            'role' => in_array($email, array_map('strtolower', config('services.firebase.master_admin_emails')), true)
+                ? 'master'
+                : (in_array($email, array_map('strtolower', config('services.firebase.admin_emails')), true) ? 'admin' : 'user'),
             'is_active' => true,
             'last_login_at' => now(),
         ]);
@@ -88,7 +90,7 @@ class AuthController extends Controller
     {
         $user = $request->user();
 
-        return ['id' => $user->id, 'uid' => $user->firebase_uid ?? "local:{$user->id}", 'email' => $user->email, 'displayName' => $user->name, 'photoURL' => $user->photo_url, 'phone' => $user->phone, 'role' => $user->role, 'isAdmin' => $user->isAdmin(), 'isActive' => $user->is_active, 'preferences' => $user->preferences, 'createdAt' => $user->created_at];
+        return ['id' => $user->id, 'uid' => $user->firebase_uid ?? "local:{$user->id}", 'email' => $user->email, 'displayName' => $user->name, 'photoURL' => $user->photo_url, 'phone' => $user->phone, 'role' => $user->role, 'isAdmin' => $user->isAdmin(), 'isMaster' => $user->isMaster(), 'isActive' => $user->is_active, 'preferences' => $user->preferences, 'createdAt' => $user->created_at];
     }
 
     /** @return array{token: string, user: array<string, mixed>} */

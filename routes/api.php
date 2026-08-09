@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\AiChatController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CatalogController;
+use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\SettingsController;
@@ -43,12 +44,16 @@ Route::prefix('v1')->group(function (): void {
             Route::post('categories', [CatalogController::class, 'storeCategory']);
             Route::patch('categories/{category}', [CatalogController::class, 'updateCategory']);
             Route::delete('categories/{category}', [CatalogController::class, 'destroyCategory']);
-            Route::get('users', [AdminController::class, 'users']);
-            Route::patch('users/{user}', [AdminController::class, 'updateUser']);
-            Route::delete('users/{user}', [AdminController::class, 'destroyUser']);
             Route::get('orders', [AdminController::class, 'orders']);
             Route::patch('orders/{order}', [AdminController::class, 'updateOrder']);
-            Route::put('settings', [SettingsController::class, 'update']);
+            Route::apiResource('media', MediaController::class)->only(['index', 'store', 'destroy']);
+
+            Route::middleware('master')->group(function (): void {
+                Route::get('users', [AdminController::class, 'users']);
+                Route::patch('users/{user}', [AdminController::class, 'updateUser']);
+                Route::delete('users/{user}', [AdminController::class, 'destroyUser']);
+                Route::put('settings', [SettingsController::class, 'update']);
+            });
         });
     });
 });

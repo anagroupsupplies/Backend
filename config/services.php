@@ -5,6 +5,7 @@ return [
     'firebase' => [
         'project_id' => env('FIREBASE_PROJECT_ID', 'anagroupsupplies'),
         'admin_emails' => array_filter(array_map('trim', explode(',', env('ADMIN_EMAILS', '')))),
+        'master_admin_emails' => array_filter(array_map('trim', explode(',', env('MASTER_ADMIN_EMAILS', '')))),
     ],
 
     'deepseek' => [

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CartItem;
 use App\Models\Order;
+use App\Models\Product;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -28,10 +29,13 @@ class OrderController extends Controller
     {
         $shipping = $request->validate(['shippingDetails' => ['required', 'array'], 'shippingDetails.fullName' => ['required', 'string', 'max:255'], 'shippingDetails.email' => ['required', 'email'], 'shippingDetails.phone' => ['required', 'string', 'max:50'], 'shippingDetails.streetAddress' => ['required', 'string', 'max:255'], 'shippingDetails.city' => ['required', 'string', 'max:100'], 'shippingDetails.state' => ['required', 'string', 'max:100'], 'shippingDetails.postalCode' => ['required', 'string', 'max:30'], 'shippingDetails.country' => ['required', 'string', 'max:100']])['shippingDetails'];
         $order = DB::transaction(function () use ($request, $shipping): Order {
-            $cart = CartItem::with('product')->where('user_id', $request->user()->id)->lockForUpdate()->get();
+            $cart = CartItem::where('user_id', $request->user()->id)->lockForUpdate()->get();
             abort_if($cart->isEmpty(), 422, 'Cart is empty.');
+            $products = Product::whereIn('id', $cart->pluck('product_id')->unique())->lockForUpdate()->get()->keyBy('id');
             foreach ($cart as $item) {
-                abort_if(! $item->product->is_active || $item->quantity > $item->product->stock, 422, "{$item->product->name} is no longer available in the requested quantity.");
+                $product = $products->get($item->product_id);
+                abort_if(! $product || ! $product->is_active || $item->quantity > $product->stock, 422, ($product?->name ?? 'An item').' is out of stock or does not have the requested quantity available.');
+                $item->setRelation('product', $product);
             }
             $subtotal = $cart->sum(fn (CartItem $item) => (float) $item->product->price * $item->quantity);
             $order = Order::create(['number' => 'ANA-'.now()->format('Ymd').'-'.Str::upper(Str::random(6)), 'user_id' => $request->user()->id, 'subtotal' => $subtotal, 'shipping_total' => 0, 'total' => $subtotal, 'status' => 'pending', 'shipping_details' => $shipping]);

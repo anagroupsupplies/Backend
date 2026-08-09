@@ -13,20 +13,27 @@ use Illuminate\Http\Request;
 
 class AdminController extends Controller
 {
-    public function dashboard(): JsonResponse
+    public function dashboard(Request $request): JsonResponse
     {
-        return response()->json(['data' => ['usersCount' => User::count(), 'productsCount' => Product::count(), 'categoriesCount' => Category::count(), 'ordersCount' => Order::count(), 'pendingOrdersCount' => Order::where('status', 'pending')->count(), 'deliveredOrdersCount' => Order::where('status', 'delivered')->count(), 'revenue' => (float) Order::where('status', 'delivered')->sum('total')]]);
+        $data = ['productsCount' => Product::count(), 'categoriesCount' => Category::count(), 'ordersCount' => Order::count(), 'pendingOrdersCount' => Order::where('status', 'pending')->count(), 'deliveredOrdersCount' => Order::where('status', 'delivered')->count(), 'revenue' => (float) Order::where('status', 'delivered')->sum('total')];
+        if ($request->user()->isMaster()) {
+            $data['usersCount'] = User::count();
+            $data['adminsCount'] = User::whereIn('role', ['admin', 'master'])->count();
+            $data['analyticsEventsCount'] = AnalyticsEvent::count();
+        }
+
+        return response()->json(['data' => $data]);
     }
 
     public function users(): JsonResponse
     {
-        return response()->json(['data' => User::latest()->get()->map(fn (User $user) => ['id' => (string) $user->id, 'uid' => $user->firebase_uid, 'displayName' => $user->name, 'email' => $user->email, 'photoURL' => $user->photo_url, 'role' => $user->role, 'isAdmin' => $user->isAdmin(), 'isActive' => $user->is_active, 'createdAt' => $user->created_at])]);
+        return response()->json(['data' => User::latest()->get()->map(fn (User $user) => ['id' => (string) $user->id, 'uid' => $user->firebase_uid, 'displayName' => $user->name, 'email' => $user->email, 'photoURL' => $user->photo_url, 'role' => $user->role, 'isAdmin' => $user->isAdmin(), 'isMaster' => $user->isMaster(), 'isActive' => $user->is_active, 'createdAt' => $user->created_at])]);
     }
 
     public function updateUser(Request $request, User $user): JsonResponse
     {
-        abort_if($request->user()->is($user) && ($request->input('role') === 'user' || $request->input('isActive') === false), 422, 'You cannot remove your own administrator access.');
-        $data = $request->validate(['role' => ['sometimes', 'in:user,admin'], 'isActive' => ['sometimes', 'boolean']]);
+        abort_if($request->user()->is($user) && ($request->input('role') !== null && $request->input('role') !== 'master' || $request->input('isActive') === false), 422, 'You cannot remove your own master access.');
+        $data = $request->validate(['role' => ['sometimes', 'in:user,admin,master'], 'isActive' => ['sometimes', 'boolean']]);
         if (array_key_exists('isActive', $data)) {
             $data['is_active'] = $data['isActive'];
             unset($data['isActive']);
