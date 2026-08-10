@@ -6,12 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\Banner;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class BannerController extends Controller
 {
     public function index(): JsonResponse
     {
-        return response()->json(['data' => Banner::where('is_active', true)->orderBy('order')->get()]);
+        return response()->json(['data' => Cache::remember('banners', 300, fn () => Banner::where('is_active', true)->orderBy('order')->get())]);
     }
 
     public function store(Request $request): JsonResponse
@@ -27,6 +28,7 @@ class BannerController extends Controller
         $buttonColor = $data['buttonColor'] ?? null;
         unset($data['buttonColor']);
         $banner = Banner::create([...$data, 'button_color' => $buttonColor]);
+        Cache::forget('banners');
 
         return response()->json(['data' => $banner], 201);
     }
@@ -51,6 +53,7 @@ class BannerController extends Controller
             unset($data['buttonColor']);
         }
         $banner->update($data);
+        Cache::forget('banners');
 
         return response()->json(['data' => $banner]);
     }
@@ -58,6 +61,7 @@ class BannerController extends Controller
     public function destroy(Banner $banner): JsonResponse
     {
         $banner->delete();
+        Cache::forget('banners');
 
         return response()->json([], 204);
     }

@@ -10,6 +10,7 @@ use App\Models\Shop;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 class CatalogController extends Controller
@@ -23,19 +24,21 @@ class CatalogController extends Controller
         $query->when($request->string('search')->isNotEmpty(), fn ($q) => $q->where(fn ($w) => $w->where('name', 'like', '%'.$request->input('search').'%')->orWhere('description', 'like', '%'.$request->input('search').'%')));
         $query->when($request->boolean('featured'), fn ($q) => $q->where('featured', true));
 
-        return response()->json(['data' => $query->latest()->get()->map(fn (Product $product) => $this->productData($product))]);
+        $cacheKey = 'products_list:'.md5(json_encode($request->only(['category', 'seller', 'shop', 'search', 'featured'])));
+
+        return response()->json(['data' => Cache::remember($cacheKey, 30, fn () => $query->latest()->get()->map(fn (Product $product) => $this->productData($product)))]);
     }
 
     public function product(Product $product): JsonResponse
     {
         abort_unless($product->is_active, 404);
 
-        return response()->json(['data' => $this->productData($product->load(['category', 'shop']))]);
+        return response()->json(['data' => Cache::remember("product:{$product->id}", 120, fn () => $this->productData($product->load(['category', 'shop'])))]);
     }
 
     public function categories(): JsonResponse
     {
-        return response()->json(['data' => Category::where('is_active', true)->orderBy('name')->get()->map(fn (Category $category) => $this->categoryData($category))]);
+        return response()->json(['data' => Cache::remember('categories', 120, fn () => Category::where('is_active', true)->orderBy('name')->get()->map(fn (Category $category) => $this->categoryData($category)))]);
     }
 
     public function group(ProductGroup $productGroup): JsonResponse
@@ -56,6 +59,7 @@ class CatalogController extends Controller
     public function store(Request $request): JsonResponse
     {
         $product = Product::create($this->withOwner($request, $this->validatedProduct($request)));
+        $this->clearCache();
 
         return response()->json(['data' => $this->productData($product->load(['category', 'shop']))], 201);
     }
@@ -82,6 +86,7 @@ class CatalogController extends Controller
     {
         $this->assertCanManageProduct($request->user(), $product);
         $product->update($this->validatedProduct($request, true));
+        $this->clearCache();
 
         return response()->json(['data' => $this->productData($product->fresh(['category', 'shop']))]);
     }
@@ -90,6 +95,7 @@ class CatalogController extends Controller
     {
         $this->assertCanManageProduct(request()->user(), $product);
         $product->delete();
+        $this->clearCache();
 
         return response()->json([], 204);
     }
@@ -98,6 +104,7 @@ class CatalogController extends Controller
     {
         $data = $request->validate(['name' => ['required', 'string', 'max:255', 'unique:categories'], 'description' => ['nullable', 'string'], 'image' => ['nullable', 'string'], 'parentId' => ['nullable', 'exists:categories,id']]);
         $category = Category::create([...$data, 'parent_id' => $data['parentId'] ?? null, 'slug' => Str::slug($data['name'])]);
+        Cache::forget('categories');
 
         return response()->json(['data' => $this->categoryData($category)], 201);
     }
@@ -114,6 +121,7 @@ class CatalogController extends Controller
             $data['parent_id'] = $data['parentId'];
             unset($data['parentId']);
         } $category->update($data);
+        Cache::forget('categories');
 
         return response()->json(['data' => $this->categoryData($category)]);
     }
@@ -122,6 +130,7 @@ class CatalogController extends Controller
     {
         abort_if($category->products()->exists(), 422, 'Category contains products.');
         $category->delete();
+        Cache::forget('categories');
 
         return response()->json([], 204);
     }
@@ -200,5 +209,11 @@ class CatalogController extends Controller
     private function assertCanManageProduct(?User $user, Product $product): void
     {
         abort_unless($user && ($user->isAdmin() || $user->ownsProduct($product)), 403, 'You can only manage products that belong to your shop.');
+    }
+
+    private function clearCache(): void
+    {
+        Cache::forget('products_list');
+        Cache::forget('categories');
     }
 }
