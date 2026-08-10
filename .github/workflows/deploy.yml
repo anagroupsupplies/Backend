@@ -26,7 +26,7 @@ jobs:
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.CPANEL_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.CPANEL_SSH_KNOWN_HOSTS }}
+          SSH_KNOWN_HOSTS: ${{ secrets.CPANEL_SSH_KNOWN_HOSTS || vars.CPANEL_SSH_KNOWN_HOSTS }}
         run: |
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/cpanel_deploy"
@@ -35,29 +35,43 @@ jobs:
 
       - name: Deploy backend through SSH
         env:
-          SSH_HOST: ${{ secrets.CPANEL_SSH_HOST }}
-          SSH_USER: ${{ secrets.CPANEL_SSH_USERNAME }}
-          SSH_PORT: ${{ vars.CPANEL_SSH_PORT || 22 }}
-          DEPLOY_PATH: ${{ vars.CPANEL_DEPLOY_PATH }}
+          SSH_HOST: ${{ secrets.CPANEL_SSH_HOST || vars.CPANEL_SSH_HOST }}
+          SSH_USER: ${{ secrets.CPANEL_SSH_USERNAME || secrets.CPANEL_SSH_USER || vars.CPANEL_SSH_USERNAME || vars.CPANEL_SSH_USER }}
+          SSH_PORT: ${{ vars.CPANEL_SSH_PORT || secrets.CPANEL_SSH_PORT || 22 }}
+          DEPLOY_PATH: ${{ vars.CPANEL_DEPLOY_PATH || secrets.CPANEL_DEPLOY_PATH }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ ! "$SSH_PORT" =~ ^[0-9]+$ ]]; then
+          set -Eeuo pipefail
+
+          if [[ -z "${SSH_HOST:-}" ]]; then
+            echo "::error::CPANEL_SSH_HOST is not set."
+            exit 1
+          fi
+          if [[ -z "${SSH_USER:-}" ]]; then
+            echo "::error::CPANEL_SSH_USERNAME or CPANEL_SSH_USER is not set."
+            exit 1
+          fi
+          if [[ ! "${SSH_PORT:-}" =~ ^[0-9]+$ ]]; then
             echo "::error::CPANEL_SSH_PORT must be numeric."
             exit 1
           fi
-          if [[ ! "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]] || [[ "$DEPLOY_PATH" == "/" ]] || [[ ${#DEPLOY_PATH} -lt 10 ]]; then
+          if [[ -z "${DEPLOY_PATH:-}" ]]; then
+            echo "::error::CPANEL_DEPLOY_PATH is not set."
+            exit 1
+          fi
+          if [[ ! "${DEPLOY_PATH}" =~ ^/[A-Za-z0-9._/-]+$ ]] || [[ "${DEPLOY_PATH}" == "/" ]] || [[ ${#DEPLOY_PATH} -lt 10 ]]; then
             echo "::error::CPANEL_DEPLOY_PATH must be a specific absolute document-root path."
             exit 1
           fi
 
           SSH_OPTIONS="-i $HOME/.ssh/cpanel_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
 
-          ssh $SSH_OPTIONS -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" <<'REMOTE_SCRIPT'
+          bash -lc "ssh $SSH_OPTIONS -p '$SSH_PORT' '$SSH_USER@$SSH_HOST' bash -s -- '$DEPLOY_PATH' '$GITHUB_REF_NAME'" <<'REMOTE_SCRIPT'
           set -Eeuo pipefail
 
-          cd "$DEPLOY_PATH"
+          cd "$1"
           echo ":: Pulling latest changes..."
-          git pull origin "$GITHUB_REF_NAME"
+          git pull origin "$2"
 
           echo ":: Installing composer dependencies..."
           composer install --no-dev --optimize-autoloader --no-interaction
