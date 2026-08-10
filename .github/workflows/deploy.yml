@@ -2,38 +2,77 @@ name: Deploy Backend
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-production
+  cancel-in-progress: true
 
 jobs:
   deploy:
+    name: Deploy backend to VPS
     runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.CPANEL_SSH_HOST }}
-          username: ${{ secrets.CPANEL_SSH_USER }}
-          key: ${{ secrets.CPANEL_SSH_PRIVATE_KEY }}
-          port: ${{ secrets.CPANEL_SSH_PORT || 22 }}
-          script: |
-            cd ${{ secrets.CPANEL_DEPLOY_PATH }}
+      - name: Check out repository
+        uses: actions/checkout@v6
 
-            echo ":: Pulling latest changes..."
-            git pull origin ${{ github.ref_name }}
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.CPANEL_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.CPANEL_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/cpanel_deploy"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/cpanel_deploy" "$HOME/.ssh/known_hosts"
 
-            echo ":: Installing composer dependencies..."
-            composer install --no-dev --optimize-autoloader --no-interaction
+      - name: Deploy backend through SSH
+        env:
+          SSH_HOST: ${{ secrets.CPANEL_SSH_HOST }}
+          SSH_USER: ${{ secrets.CPANEL_SSH_USERNAME }}
+          SSH_PORT: ${{ vars.CPANEL_SSH_PORT || 22 }}
+          DEPLOY_PATH: ${{ vars.CPANEL_DEPLOY_PATH }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$SSH_PORT" =~ ^[0-9]+$ ]]; then
+            echo "::error::CPANEL_SSH_PORT must be numeric."
+            exit 1
+          fi
+          if [[ ! "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]] || [[ "$DEPLOY_PATH" == "/" ]] || [[ ${#DEPLOY_PATH} -lt 10 ]]; then
+            echo "::error::CPANEL_DEPLOY_PATH must be a specific absolute document-root path."
+            exit 1
+          fi
 
-            echo ":: Running migrations..."
-            php artisan migrate --force --no-interaction
+          SSH_OPTIONS="-i $HOME/.ssh/cpanel_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
 
-            echo ":: Optimizing application..."
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
-            php artisan event:cache
+          ssh $SSH_OPTIONS -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" <<'REMOTE_SCRIPT'
+          set -Eeuo pipefail
 
-            echo ":: Clearing old caches..."
-            php artisan cache:clear
+          cd "$DEPLOY_PATH"
+          echo ":: Pulling latest changes..."
+          git pull origin "$GITHUB_REF_NAME"
 
-            echo ":: Deployment complete."
+          echo ":: Installing composer dependencies..."
+          composer install --no-dev --optimize-autoloader --no-interaction
+
+          echo ":: Running migrations..."
+          php artisan migrate --force --no-interaction
+
+          echo ":: Optimizing application..."
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+          php artisan event:cache
+
+          echo ":: Clearing old caches..."
+          php artisan cache:clear
+
+          echo ":: Deployment complete."
+          REMOTE_SCRIPT
