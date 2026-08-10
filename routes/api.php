@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\AiChatController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BannerController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CatalogController;
 use App\Http\Controllers\Api\MediaController;
@@ -16,6 +17,7 @@ Route::prefix('v1')->group(function (): void {
     Route::get('products', [CatalogController::class, 'products']);
     Route::get('products/{product}', [CatalogController::class, 'product']);
     Route::get('categories', [CatalogController::class, 'categories']);
+    Route::get('banners', [BannerController::class, 'index']);
     Route::get('product-groups/{productGroup}', [CatalogController::class, 'group']);
     Route::get('products/{product}/reviews', [ReviewController::class, 'index']);
     Route::get('settings', [SettingsController::class, 'show']);
@@ -41,8 +43,20 @@ Route::prefix('v1')->group(function (): void {
         Route::post('products/{product}/reviews', [ReviewController::class, 'store']);
         Route::post('analytics', [AdminController::class, 'track']);
 
+        Route::prefix('seller')->middleware('seller')->group(function (): void {
+            Route::get('dashboard', [AdminController::class, 'sellerDashboard']);
+            Route::get('orders', [AdminController::class, 'sellerOrders']);
+            Route::get('products', [CatalogController::class, 'manageableProducts']);
+            Route::post('products', [CatalogController::class, 'store']);
+            Route::patch('products/{product}', [CatalogController::class, 'update']);
+            Route::delete('products/{product}', [CatalogController::class, 'destroy']);
+            Route::post('product-groups', [CatalogController::class, 'storeGroup']);
+            Route::apiResource('media', MediaController::class)->only(['index', 'store', 'destroy']);
+        });
+
         Route::prefix('admin')->middleware('admin')->group(function (): void {
             Route::get('dashboard', [AdminController::class, 'dashboard']);
+            Route::get('products', [CatalogController::class, 'manageableProducts']);
             Route::apiResource('products', CatalogController::class)->except(['index', 'show']);
             Route::post('product-groups', [CatalogController::class, 'storeGroup']);
             Route::post('categories', [CatalogController::class, 'storeCategory']);
@@ -51,6 +65,11 @@ Route::prefix('v1')->group(function (): void {
             Route::get('orders', [AdminController::class, 'orders']);
             Route::patch('orders/{order}', [AdminController::class, 'updateOrder']);
             Route::apiResource('media', MediaController::class)->only(['index', 'store', 'destroy']);
+            Route::get('shops', [AdminController::class, 'shops']);
+            Route::patch('shops/{shop}', [AdminController::class, 'updateShop']);
+            Route::get('reviews', [AdminController::class, 'reviews']);
+            Route::delete('reviews/{review}', [AdminController::class, 'destroyReview']);
+            Route::apiResource('banners', BannerController::class)->except(['index', 'show']);
 
             Route::middleware('master')->group(function (): void {
                 Route::get('users', [AdminController::class, 'users']);

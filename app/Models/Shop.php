@@ -4,13 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class ProductGroup extends Model
+class Shop extends Model
 {
     protected $guarded = [];
 
     protected function casts(): array
     {
-        return ['data' => 'array'];
+        return ['is_active' => 'boolean', 'settings' => 'array'];
     }
 
     public function seller()
@@ -18,8 +18,8 @@ class ProductGroup extends Model
         return $this->belongsTo(User::class, 'seller_id');
     }
 
-    public function shop()
+    public function products()
     {
-        return $this->belongsTo(Shop::class);
+        return $this->hasMany(Product::class);
     }
 }

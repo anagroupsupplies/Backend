@@ -3,10 +3,10 @@
 use App\Models\User;
 use App\Notifications\ResetPasswordNotification;
 use App\Notifications\VerifyEmailNotification;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\URL;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
@@ -43,6 +43,7 @@ test('a user can request and complete a password reset', function () {
     $this->postJson('/api/v1/auth/forgot-password', ['email' => $user->email])->assertOk();
     Notification::assertSentTo($user, ResetPasswordNotification::class, function ($notification) use (&$token) {
         $token = $notification->token;
+
         return true;
     });
 

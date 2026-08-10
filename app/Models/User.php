@@ -40,14 +40,54 @@ class User extends Authenticatable implements MustVerifyEmail
         return in_array($this->role, ['admin', 'master'], true);
     }
 
+    public function isPlatformAdmin(): bool
+    {
+        return $this->isAdmin();
+    }
+
     public function isMaster(): bool
     {
         return $this->role === 'master';
     }
 
+    public function isMainAdmin(): bool
+    {
+        return $this->isMaster();
+    }
+
+    public function isSeller(): bool
+    {
+        return $this->role === 'seller';
+    }
+
+    public function isBuyer(): bool
+    {
+        return $this->role === 'user';
+    }
+
+    public function canSell(): bool
+    {
+        return $this->isSeller() || $this->isAdmin();
+    }
+
+    public function ownsProduct(Product $product): bool
+    {
+        return $this->isSeller() && $product->seller_id === $this->id;
+    }
+
     public function apiTokens()
     {
         return $this->hasMany(ApiToken::class);
+    }
+
+    public function shop()
+    {
+        return $this->hasOne(Shop::class, 'seller_id');
+    }
+
+    public function products()
+    {
+        return $this->hasMany(Product::class, 'seller_id');
     }
 
     public function sendEmailVerificationNotification(): void
@@ -59,4 +99,12 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         $this->notify(new ResetPasswordNotification($token));
     }
+
+    public const ROLE_BUYER = 'user';
+
+    public const ROLE_SELLER = 'seller';
+
+    public const ROLE_ADMIN = 'admin';
+
+    public const ROLE_MASTER = 'master';
 }

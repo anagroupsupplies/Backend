@@ -7,4 +7,9 @@ use Illuminate\Database\Eloquent\Model;
 class Media extends Model
 {
     protected $guarded = [];
+
+    protected function casts(): array
+    {
+        return ['metadata' => 'array'];
+    }
 }

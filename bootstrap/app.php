@@ -2,8 +2,9 @@
 
 use App\Http\Middleware\AuthenticateFirebase;
 use App\Http\Middleware\EnsureAdmin;
-use App\Http\Middleware\EnsureMaster;
 use App\Http\Middleware\EnsureEmailIsVerified;
+use App\Http\Middleware\EnsureMaster;
+use App\Http\Middleware\EnsureSeller;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -21,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'firebase' => AuthenticateFirebase::class,
             'admin' => EnsureAdmin::class,
             'master' => EnsureMaster::class,
+            'seller' => EnsureSeller::class,
             'verified.api' => EnsureEmailIsVerified::class,
         ]);
     })

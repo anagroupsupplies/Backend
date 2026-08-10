@@ -12,4 +12,14 @@ class OrderItem extends Model
     {
         return ['unit_price' => 'decimal:2', 'product_snapshot' => 'array'];
     }
+
+    public function seller()
+    {
+        return $this->belongsTo(User::class, 'seller_id');
+    }
+
+    public function shop()
+    {
+        return $this->belongsTo(Shop::class);
+    }
 }

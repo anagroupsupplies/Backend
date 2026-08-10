@@ -41,7 +41,7 @@ class OrderController extends Controller
             $order = Order::create(['number' => 'ANA-'.now()->format('Ymd').'-'.Str::upper(Str::random(6)), 'user_id' => $request->user()->id, 'subtotal' => $subtotal, 'shipping_total' => 0, 'total' => $subtotal, 'status' => 'pending', 'shipping_details' => $shipping]);
             foreach ($cart as $item) {
                 $product = $item->product;
-                $order->items()->create(['product_id' => $product->id, 'name' => $product->name, 'unit_price' => $product->price, 'quantity' => $item->quantity, 'selected_size' => $item->selected_size, 'sizing_type' => $product->sizing_type, 'image' => $product->image, 'product_snapshot' => ['id' => $product->id, 'name' => $product->name, 'price' => $product->price]]);
+                $order->items()->create(['product_id' => $product->id, 'seller_id' => $product->seller_id, 'shop_id' => $product->shop_id, 'name' => $product->name, 'unit_price' => $product->price, 'quantity' => $item->quantity, 'selected_size' => $item->selected_size, 'sizing_type' => $product->sizing_type, 'image' => $product->image, 'product_snapshot' => ['id' => $product->id, 'sellerId' => $product->seller_id, 'shopId' => $product->shop_id, 'name' => $product->name, 'price' => $product->price]]);
                 $product->decrement('stock', $item->quantity);
             }
             CartItem::where('user_id', $request->user()->id)->delete();
@@ -55,6 +55,6 @@ class OrderController extends Controller
     /** @return array<string, mixed> */
     private function data(Order $order): array
     {
-        return ['id' => (string) $order->id, 'number' => $order->number, 'userId' => (string) $order->user_id, 'items' => $order->items->map(fn ($item) => ['id' => (string) $item->id, 'productId' => $item->product_id ? (string) $item->product_id : null, 'name' => $item->name, 'price' => (float) $item->unit_price, 'quantity' => $item->quantity, 'selectedSize' => $item->selected_size, 'sizingType' => $item->sizing_type, 'image' => $item->image]), 'total' => (float) $order->total, 'shippingDetails' => $order->shipping_details, 'status' => $order->status, 'createdAt' => $order->created_at, 'updatedAt' => $order->updated_at];
+        return ['id' => (string) $order->id, 'number' => $order->number, 'userId' => (string) $order->user_id, 'items' => $order->items->map(fn ($item) => ['id' => (string) $item->id, 'productId' => $item->product_id ? (string) $item->product_id : null, 'sellerId' => $item->seller_id ? (string) $item->seller_id : null, 'shopId' => $item->shop_id ? (string) $item->shop_id : null, 'name' => $item->name, 'price' => (float) $item->unit_price, 'quantity' => $item->quantity, 'selectedSize' => $item->selected_size, 'sizingType' => $item->sizing_type, 'image' => $item->image]), 'total' => (float) $order->total, 'shippingDetails' => $order->shipping_details, 'status' => $order->status, 'createdAt' => $order->created_at, 'updatedAt' => $order->updated_at];
     }
 }
