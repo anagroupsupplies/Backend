@@ -43,7 +43,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('products/{product}/reviews', [ReviewController::class, 'store']);
         Route::post('analytics', [AdminController::class, 'track']);
 
-        Route::prefix('seller')->middleware('seller')->group(function (): void {
+        Route::prefix('seller')->middleware('seller')->name('seller.')->group(function (): void {
             Route::get('dashboard', [AdminController::class, 'sellerDashboard']);
             Route::get('orders', [AdminController::class, 'sellerOrders']);
             Route::get('products', [CatalogController::class, 'manageableProducts']);
@@ -54,7 +54,7 @@ Route::prefix('v1')->group(function (): void {
             Route::apiResource('media', MediaController::class)->only(['index', 'store', 'destroy']);
         });
 
-        Route::prefix('admin')->middleware('admin')->group(function (): void {
+        Route::prefix('admin')->middleware('admin')->name('admin.')->group(function (): void {
             Route::get('dashboard', [AdminController::class, 'dashboard']);
             Route::get('products', [CatalogController::class, 'manageableProducts']);
             Route::apiResource('products', CatalogController::class)->except(['index', 'show']);
