@@ -65,3 +65,32 @@ test('a master administrator receives full metrics and controls users', function
     $this->getJson('/api/v1/admin/dashboard')->assertOk()->assertJsonPath('data.usersCount', 1);
     $this->getJson('/api/v1/admin/users')->assertOk()->assertJsonPath('data.0.role', 'master');
 });
+
+test('a seller cannot reassign product ownership or self-feature via update', function () {
+    $sellerA = User::factory()->create(['role' => 'seller']);
+    $sellerB = User::factory()->create(['role' => 'seller']);
+    $product = Product::create(['seller_id' => $sellerA->id, 'name' => 'Bag', 'slug' => 'bag', 'price' => 20000, 'stock' => 3]);
+
+    $this->actingAs($sellerA);
+    $this->patchJson("/api/v1/seller/products/{$product->id}", [
+        'sellerId' => $sellerB->id,
+        'featured' => true,
+    ])->assertOk();
+
+    expect($product->fresh())
+        ->seller_id->toBe($sellerA->id)
+        ->featured->toBeFalse();
+});
+
+test('an administrator can reassign product ownership and featured status via update', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $seller = User::factory()->create(['role' => 'seller']);
+    $product = Product::create(['seller_id' => $seller->id, 'name' => 'Bag', 'slug' => 'bag-admin', 'price' => 20000, 'stock' => 3]);
+
+    $this->actingAs($admin);
+    $this->patchJson("/api/v1/admin/products/{$product->id}", [
+        'featured' => true,
+    ])->assertOk();
+
+    expect($product->fresh()->featured)->toBeTrue();
+});

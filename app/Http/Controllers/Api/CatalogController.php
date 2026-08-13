@@ -85,7 +85,7 @@ class CatalogController extends Controller
     public function update(Request $request, Product $product): JsonResponse
     {
         $this->assertCanManageProduct($request->user(), $product);
-        $product->update($this->validatedProduct($request, true));
+        $product->update($this->withOwner($request, $this->validatedProduct($request, true)));
         $this->clearCache();
 
         return response()->json(['data' => $this->productData($product->fresh(['category', 'shop']))]);
