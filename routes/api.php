@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\SettingsController;
+use App\Http\Controllers\Api\ShopController;
 use App\Http\Controllers\Api\WishlistController;
 use Illuminate\Support\Facades\Route;
 
@@ -18,6 +19,7 @@ Route::prefix('v1')->group(function (): void {
     Route::get('products/{product}', [CatalogController::class, 'product']);
     Route::get('categories', [CatalogController::class, 'categories']);
     Route::get('banners', [BannerController::class, 'index']);
+    Route::get('shops/{shop:slug}', [ShopController::class, 'show']);
     Route::get('product-groups/{productGroup}', [CatalogController::class, 'group']);
     Route::get('products/{product}/reviews', [ReviewController::class, 'index']);
     Route::get('settings', [SettingsController::class, 'show']);
@@ -46,6 +48,8 @@ Route::prefix('v1')->group(function (): void {
         Route::prefix('seller')->middleware('seller')->name('seller.')->group(function (): void {
             Route::get('dashboard', [AdminController::class, 'sellerDashboard']);
             Route::get('orders', [AdminController::class, 'sellerOrders']);
+            Route::get('shop', [ShopController::class, 'mine']);
+            Route::patch('shop', [ShopController::class, 'update']);
             Route::get('products', [CatalogController::class, 'manageableProducts']);
             Route::post('products', [CatalogController::class, 'store']);
             Route::patch('products/{product}', [CatalogController::class, 'update']);

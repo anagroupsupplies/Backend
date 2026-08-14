@@ -5,6 +5,7 @@ use App\Models\CartItem;
 use App\Models\Category;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\Shop;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -93,4 +94,55 @@ test('an administrator can reassign product ownership and featured status via up
     ])->assertOk();
 
     expect($product->fresh()->featured)->toBeTrue();
+});
+
+test('the public shop page returns an active shop by slug with default branding', function () {
+    $seller = User::factory()->create(['role' => 'seller']);
+    Shop::create(['seller_id' => $seller->id, 'name' => 'Cool Store', 'slug' => 'cool-store']);
+
+    $this->getJson('/api/v1/shops/cool-store')
+        ->assertOk()
+        ->assertJsonPath('data.name', 'Cool Store')
+        ->assertJsonPath('data.slug', 'cool-store')
+        ->assertJsonPath('data.primaryColor', '#3157d5');
+});
+
+test('an inactive or unknown shop slug returns 404', function () {
+    $seller = User::factory()->create(['role' => 'seller']);
+    Shop::create(['seller_id' => $seller->id, 'name' => 'Hidden Store', 'slug' => 'hidden-store', 'is_active' => false]);
+
+    $this->getJson('/api/v1/shops/hidden-store')->assertNotFound();
+    $this->getJson('/api/v1/shops/does-not-exist')->assertNotFound();
+});
+
+test('a seller can view and update their own shop branding', function () {
+    $seller = User::factory()->create(['role' => 'seller']);
+    $this->actingAs($seller);
+
+    $this->getJson('/api/v1/seller/shop')->assertOk()->assertJsonPath('data.primaryColor', '#3157d5');
+
+    $this->patchJson('/api/v1/seller/shop', [
+        'name' => 'My Rebranded Shop',
+        'logo' => 'https://example.test/logo.png',
+        'primaryColor' => '#ff0000',
+        'accentColor' => '#00ff00',
+    ])->assertOk()
+        ->assertJsonPath('data.name', 'My Rebranded Shop')
+        ->assertJsonPath('data.logo', 'https://example.test/logo.png')
+        ->assertJsonPath('data.primaryColor', '#ff0000')
+        ->assertJsonPath('data.accentColor', '#00ff00');
+
+    expect(Shop::where('seller_id', $seller->id)->first()->settings)
+        ->toMatchArray(['primaryColor' => '#ff0000', 'accentColor' => '#00ff00']);
+});
+
+test('a seller cannot affect another sellers shop through the shop endpoints', function () {
+    $sellerA = User::factory()->create(['role' => 'seller']);
+    $sellerB = User::factory()->create(['role' => 'seller']);
+    $shopB = Shop::create(['seller_id' => $sellerB->id, 'name' => "B's Shop", 'slug' => 'bs-shop']);
+
+    $this->actingAs($sellerA);
+    $this->patchJson('/api/v1/seller/shop', ['name' => 'Hijacked'])->assertOk();
+
+    expect($shopB->fresh()->name)->toBe("B's Shop");
 });

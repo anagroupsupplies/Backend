@@ -127,12 +127,23 @@ class AdminController extends Controller
             'isActive' => ['sometimes', 'boolean'],
             'name' => ['nullable', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
+            'logo' => ['nullable', 'string'],
+            'banner' => ['nullable', 'string'],
+            'primaryColor' => ['nullable', 'regex:/^#[0-9a-fA-F]{6}$/'],
+            'accentColor' => ['nullable', 'regex:/^#[0-9a-fA-F]{6}$/'],
         ]);
         if (array_key_exists('isActive', $data)) {
             $data['is_active'] = $data['isActive'];
             unset($data['isActive']);
         }
-        $shop->update($data);
+        $settings = $shop->settings ?? [];
+        foreach (['primaryColor', 'accentColor'] as $key) {
+            if (array_key_exists($key, $data)) {
+                $settings[$key] = $data[$key];
+                unset($data[$key]);
+            }
+        }
+        $shop->update([...$data, 'settings' => $settings]);
 
         return response()->json(['data' => $shop]);
     }

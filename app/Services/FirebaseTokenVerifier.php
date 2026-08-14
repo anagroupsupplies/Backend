@@ -26,12 +26,20 @@ class FirebaseTokenVerifier
             throw new RuntimeException('Unsupported Firebase token.');
         }
 
-        if (($claims['aud'] ?? null) !== $projectId
-            || ($claims['iss'] ?? null) !== "https://securetoken.google.com/{$projectId}"
-            || empty($claims['sub'])
-            || ($claims['exp'] ?? 0) < $now
-            || ($claims['iat'] ?? PHP_INT_MAX) > $now + 60) {
-            throw new RuntimeException('Invalid Firebase token claims.');
+        if (($claims['aud'] ?? null) !== $projectId) {
+            throw new RuntimeException("Token audience \"{$claims['aud']}\" does not match configured Firebase project \"{$projectId}\".");
+        }
+        if (($claims['iss'] ?? null) !== "https://securetoken.google.com/{$projectId}") {
+            throw new RuntimeException("Token issuer \"{$claims['iss']}\" does not match configured Firebase project \"{$projectId}\".");
+        }
+        if (empty($claims['sub'])) {
+            throw new RuntimeException('Token is missing a subject (sub) claim.');
+        }
+        if (($claims['exp'] ?? 0) < $now) {
+            throw new RuntimeException('Token has expired.');
+        }
+        if (($claims['iat'] ?? PHP_INT_MAX) > $now + 60) {
+            throw new RuntimeException('Token issued-at time is too far in the future (server clock skew?).');
         }
 
         $certificates = Cache::remember('firebase-public-certificates', now()->addMinutes(30), fn (): array => $this->fetchCertificates());
