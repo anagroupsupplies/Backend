@@ -86,7 +86,7 @@ class CatalogController extends Controller
     {
         $this->assertCanManageProduct($request->user(), $product);
         $product->update($this->withOwner($request, $this->validatedProduct($request, true)));
-        $this->clearCache();
+        $this->clearCache($product->id);
 
         return response()->json(['data' => $this->productData($product->fresh(['category', 'shop']))]);
     }
@@ -94,8 +94,9 @@ class CatalogController extends Controller
     public function destroy(Product $product): JsonResponse
     {
         $this->assertCanManageProduct(request()->user(), $product);
+        $productId = $product->id;
         $product->delete();
-        $this->clearCache();
+        $this->clearCache($productId);
 
         return response()->json([], 204);
     }
@@ -211,9 +212,12 @@ class CatalogController extends Controller
         abort_unless($user && ($user->isAdmin() || $user->ownsProduct($product)), 403, 'You can only manage products that belong to your shop.');
     }
 
-    private function clearCache(): void
+    private function clearCache(?int $productId = null): void
     {
         Cache::forget('products_list');
         Cache::forget('categories');
+        if ($productId !== null) {
+            Cache::forget("product:{$productId}");
+        }
     }
 }
