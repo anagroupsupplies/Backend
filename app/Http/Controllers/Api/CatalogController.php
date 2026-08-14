@@ -26,7 +26,7 @@ class CatalogController extends Controller
 
         $cacheKey = 'products_list:'.md5(json_encode($request->only(['category', 'seller', 'shop', 'search', 'featured'])));
 
-        return response()->json(['data' => Cache::remember($cacheKey, 30, fn () => $query->latest()->get()->map(fn (Product $product) => $this->productData($product)))]);
+        return response()->json(['data' => Cache::remember($cacheKey, 30, fn () => $query->latest()->get()->map(fn (Product $product) => $this->productData($product))->all())]);
     }
 
     public function product(Product $product): JsonResponse
@@ -38,7 +38,7 @@ class CatalogController extends Controller
 
     public function categories(): JsonResponse
     {
-        return response()->json(['data' => Cache::remember('categories', 120, fn () => Category::where('is_active', true)->orderBy('name')->get()->map(fn (Category $category) => $this->categoryData($category)))]);
+        return response()->json(['data' => Cache::remember('categories', 120, fn () => Category::where('is_active', true)->orderBy('name')->get()->map(fn (Category $category) => $this->categoryData($category))->all())]);
     }
 
     public function group(ProductGroup $productGroup): JsonResponse

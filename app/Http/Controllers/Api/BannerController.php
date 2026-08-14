@@ -12,7 +12,7 @@ class BannerController extends Controller
 {
     public function index(): JsonResponse
     {
-        return response()->json(['data' => Cache::remember('banners', 300, fn () => Banner::where('is_active', true)->orderBy('order')->get())]);
+        return response()->json(['data' => Cache::remember('banners', 300, fn () => Banner::where('is_active', true)->orderBy('order')->get()->toArray())]);
     }
 
     public function store(Request $request): JsonResponse
