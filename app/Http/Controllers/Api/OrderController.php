@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class OrderController extends Controller
 {
@@ -27,8 +28,27 @@ class OrderController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $shipping = $request->validate(['shippingDetails' => ['required', 'array'], 'shippingDetails.fullName' => ['required', 'string', 'max:255'], 'shippingDetails.email' => ['required', 'email'], 'shippingDetails.phone' => ['required', 'string', 'max:50'], 'shippingDetails.streetAddress' => ['required', 'string', 'max:255'], 'shippingDetails.city' => ['required', 'string', 'max:100'], 'shippingDetails.state' => ['required', 'string', 'max:100'], 'shippingDetails.postalCode' => ['required', 'string', 'max:30'], 'shippingDetails.country' => ['required', 'string', 'max:100']])['shippingDetails'];
-        $order = DB::transaction(function () use ($request, $shipping): Order {
+        $validated = $request->validate([
+            'shippingDetails' => ['required', 'array'],
+            'shippingDetails.fullName' => ['required', 'string', 'max:255'],
+            'shippingDetails.email' => ['required', 'email'],
+            'shippingDetails.phone' => ['required', 'string', 'max:50'],
+            'shippingDetails.streetAddress' => ['required', 'string', 'max:255'],
+            'shippingDetails.city' => ['required', 'string', 'max:100'],
+            'shippingDetails.state' => ['required', 'string', 'max:100'],
+            'shippingDetails.postalCode' => ['required', 'string', 'max:30'],
+            'shippingDetails.country' => ['required', 'string', 'max:100'],
+            'shippingDetails.deliveryNotes' => ['nullable', 'string', 'max:1000'],
+            'paymentMethod' => ['nullable', Rule::in(Order::PAYMENT_METHODS)],
+            'deliveryLocation' => ['nullable', 'array'],
+            'deliveryLocation.latitude' => ['required_with:deliveryLocation', 'numeric', 'between:-90,90'],
+            'deliveryLocation.longitude' => ['required_with:deliveryLocation', 'numeric', 'between:-180,180'],
+            'deliveryLocation.accuracy' => ['nullable', 'numeric', 'min:0', 'max:100000'],
+        ]);
+        $shipping = $validated['shippingDetails'];
+        $paymentMethod = $validated['paymentMethod'] ?? Order::PAYMENT_ON_DELIVERY;
+        $location = $validated['deliveryLocation'] ?? null;
+        $order = DB::transaction(function () use ($request, $shipping, $paymentMethod, $location): Order {
             $cart = CartItem::where('user_id', $request->user()->id)->lockForUpdate()->get();
             abort_if($cart->isEmpty(), 422, 'Cart is empty.');
             $products = Product::whereIn('id', $cart->pluck('product_id')->unique())->lockForUpdate()->get()->keyBy('id');
@@ -38,7 +58,7 @@ class OrderController extends Controller
                 $item->setRelation('product', $product);
             }
             $subtotal = $cart->sum(fn (CartItem $item) => (float) $item->product->price * $item->quantity);
-            $order = Order::create(['number' => 'ANA-'.now()->format('Ymd').'-'.Str::upper(Str::random(6)), 'user_id' => $request->user()->id, 'subtotal' => $subtotal, 'shipping_total' => 0, 'total' => $subtotal, 'status' => 'pending', 'shipping_details' => $shipping]);
+            $order = Order::create(['number' => 'ANA-'.now()->format('Ymd').'-'.Str::upper(Str::random(6)), 'user_id' => $request->user()->id, 'subtotal' => $subtotal, 'shipping_total' => 0, 'total' => $subtotal, 'status' => 'pending', 'shipping_details' => $shipping, 'payment_method' => $paymentMethod, 'payment_status' => $paymentMethod === Order::PAYMENT_ON_DELIVERY ? 'pending' : 'awaiting_payment', 'delivery_latitude' => $location['latitude'] ?? null, 'delivery_longitude' => $location['longitude'] ?? null, 'delivery_accuracy' => $location['accuracy'] ?? null]);
             foreach ($cart as $item) {
                 $product = $item->product;
                 $order->items()->create(['product_id' => $product->id, 'seller_id' => $product->seller_id, 'shop_id' => $product->shop_id, 'name' => $product->name, 'unit_price' => $product->price, 'quantity' => $item->quantity, 'selected_size' => $item->selected_size, 'sizing_type' => $product->sizing_type, 'image' => $product->image, 'product_snapshot' => ['id' => $product->id, 'sellerId' => $product->seller_id, 'shopId' => $product->shop_id, 'name' => $product->name, 'price' => $product->price]]);
@@ -55,6 +75,6 @@ class OrderController extends Controller
     /** @return array<string, mixed> */
     private function data(Order $order): array
     {
-        return ['id' => (string) $order->id, 'number' => $order->number, 'userId' => (string) $order->user_id, 'items' => $order->items->map(fn ($item) => ['id' => (string) $item->id, 'productId' => $item->product_id ? (string) $item->product_id : null, 'sellerId' => $item->seller_id ? (string) $item->seller_id : null, 'shopId' => $item->shop_id ? (string) $item->shop_id : null, 'name' => $item->name, 'price' => (float) $item->unit_price, 'quantity' => $item->quantity, 'selectedSize' => $item->selected_size, 'sizingType' => $item->sizing_type, 'image' => $item->image]), 'total' => (float) $order->total, 'shippingDetails' => $order->shipping_details, 'status' => $order->status, 'createdAt' => $order->created_at, 'updatedAt' => $order->updated_at];
+        return ['id' => (string) $order->id, 'number' => $order->number, 'userId' => (string) $order->user_id, 'items' => $order->items->map(fn ($item) => ['id' => (string) $item->id, 'productId' => $item->product_id ? (string) $item->product_id : null, 'sellerId' => $item->seller_id ? (string) $item->seller_id : null, 'shopId' => $item->shop_id ? (string) $item->shop_id : null, 'name' => $item->name, 'price' => (float) $item->unit_price, 'quantity' => $item->quantity, 'selectedSize' => $item->selected_size, 'sizingType' => $item->sizing_type, 'image' => $item->image]), 'total' => (float) $order->total, 'shippingDetails' => $order->shipping_details, 'status' => $order->status, 'paymentMethod' => $order->payment_method, 'paymentStatus' => $order->payment_status, 'deliveryLocation' => $order->delivery_latitude === null ? null : ['latitude' => $order->delivery_latitude, 'longitude' => $order->delivery_longitude, 'accuracy' => $order->delivery_accuracy], 'createdAt' => $order->created_at, 'updatedAt' => $order->updated_at];
     }
 }

@@ -44,6 +44,67 @@ test('checkout calculates totals from mysql, snapshots items, decrements stock, 
         ->and(CartItem::count())->toBe(0);
 });
 
+test('checkout stores the payment method and gps delivery location', function () {
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey', 'price' => 50000, 'stock' => 4]);
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'none', 'quantity' => 1]);
+    $this->actingAs($user);
+
+    $response = $this->postJson('/api/v1/checkout', [
+        'shippingDetails' => [
+            'fullName' => 'Test Customer', 'email' => 'customer@example.com', 'phone' => '255700000000',
+            'streetAddress' => '1 Test Street', 'city' => 'Dar es Salaam', 'state' => 'Dar es Salaam',
+            'postalCode' => '11101', 'country' => 'Tanzania', 'deliveryNotes' => 'Blue gate',
+        ],
+        'paymentMethod' => 'mobile_money',
+        'deliveryLocation' => ['latitude' => -6.7923542, 'longitude' => 39.2083284, 'accuracy' => 12.5],
+    ]);
+
+    $response->assertCreated()
+        ->assertJsonPath('data.paymentMethod', 'mobile_money')
+        ->assertJsonPath('data.paymentStatus', 'awaiting_payment')
+        ->assertJsonPath('data.deliveryLocation.latitude', -6.7923542);
+
+    expect(Order::first()->shipping_details['deliveryNotes'])->toBe('Blue gate');
+});
+
+test('checkout defaults to pay on delivery and rejects an unknown payment method', function () {
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey', 'price' => 50000, 'stock' => 4]);
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'none', 'quantity' => 1]);
+    $this->actingAs($user);
+
+    $shipping = ['shippingDetails' => [
+        'fullName' => 'Test Customer', 'email' => 'customer@example.com', 'phone' => '255700000000',
+        'streetAddress' => '1 Test Street', 'city' => 'Dar es Salaam', 'state' => 'Dar es Salaam',
+        'postalCode' => '11101', 'country' => 'Tanzania',
+    ]];
+
+    $this->postJson('/api/v1/checkout', [...$shipping, 'paymentMethod' => 'bitcoin'])
+        ->assertStatus(422);
+
+    $this->postJson('/api/v1/checkout', $shipping)
+        ->assertCreated()
+        ->assertJsonPath('data.paymentMethod', 'cash_on_delivery')
+        ->assertJsonPath('data.deliveryLocation', null);
+});
+
+test('checkout rejects an out of range gps coordinate', function () {
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey', 'price' => 50000, 'stock' => 4]);
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'none', 'quantity' => 1]);
+    $this->actingAs($user);
+
+    $this->postJson('/api/v1/checkout', [
+        'shippingDetails' => [
+            'fullName' => 'Test Customer', 'email' => 'customer@example.com', 'phone' => '255700000000',
+            'streetAddress' => '1 Test Street', 'city' => 'Dar es Salaam', 'state' => 'Dar es Salaam',
+            'postalCode' => '11101', 'country' => 'Tanzania',
+        ],
+        'deliveryLocation' => ['latitude' => 999, 'longitude' => 39.2083284],
+    ])->assertStatus(422)->assertJsonValidationErrors('deliveryLocation.latitude');
+});
+
 test('a customer cannot access administrator routes', function () {
     $this->actingAs(User::factory()->create());
     $this->getJson('/api/v1/admin/dashboard')->assertForbidden();
