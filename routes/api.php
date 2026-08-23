@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\ShopController;
+use App\Http\Controllers\Api\TicketController;
 use App\Http\Controllers\Api\WishlistController;
 use Illuminate\Support\Facades\Route;
 
@@ -45,6 +46,13 @@ Route::prefix('v1')->group(function (): void {
         Route::apiResource('wishlist', WishlistController::class)->only(['index', 'store', 'destroy']);
         Route::post('wishlist/{wishlistItem}/move-to-cart', [WishlistController::class, 'moveToCart']);
         Route::apiResource('addresses', AddressController::class)->only(['index', 'store', 'update', 'destroy']);
+        // Support tickets. One set of endpoints for customers, sellers and
+        // admins; visibility is scoped per role inside the controller.
+        Route::get('tickets', [TicketController::class, 'index']);
+        Route::post('tickets', [TicketController::class, 'store'])->middleware('throttle:20,1');
+        Route::get('tickets/{ticket}', [TicketController::class, 'show']);
+        Route::patch('tickets/{ticket}', [TicketController::class, 'update']);
+        Route::post('tickets/{ticket}/messages', [TicketController::class, 'reply'])->middleware('throttle:60,1');
         Route::get('orders', [OrderController::class, 'index']);
         Route::get('orders/{order}', [OrderController::class, 'show']);
         Route::post('checkout', [OrderController::class, 'store'])->middleware('verified.api');

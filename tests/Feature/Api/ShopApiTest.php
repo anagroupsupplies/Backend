@@ -9,11 +9,14 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\Setting;
 use App\Models\Shop;
+use App\Models\Ticket;
 use App\Models\User;
 use App\Notifications\NewOrderForSellerNotification;
 use App\Notifications\OrderPaymentConfirmedNotification;
 use App\Notifications\OrderPlacedNotification;
 use App\Notifications\OrderStatusUpdatedNotification;
+use App\Notifications\TicketOpenedNotification;
+use App\Notifications\TicketRepliedNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\Http;
@@ -931,4 +934,231 @@ test('a failure to write the audit trail never breaks the action itself', functi
     $this->actingAs($master)->patchJson("/api/v1/admin/users/{$target->id}", ['role' => 'seller'])->assertOk();
 
     expect($target->refresh()->role)->toBe('seller');
+});
+
+/** A seller with a shop and one product. */
+function sellerWithProduct(string $slug = 'ticket-jersey'): array
+{
+    $seller = User::factory()->create(['role' => 'seller', 'name' => 'Seller One']);
+    $shop = Shop::create(['seller_id' => $seller->id, 'name' => 'Seller One Shop', 'slug' => 'seller-one-shop-'.$slug]);
+    $product = Product::create(['name' => 'Jersey', 'slug' => $slug, 'price' => 50000, 'stock' => 5, 'seller_id' => $seller->id, 'shop_id' => $shop->id]);
+
+    return [$seller, $shop, $product];
+}
+
+test('a customer opens a ticket about a product and it reaches that seller', function () {
+    Notification::fake();
+    [$seller, $shop, $product] = sellerWithProduct();
+    $buyer = User::factory()->create(['name' => 'Buyer One']);
+
+    $response = $this->actingAs($buyer)->postJson('/api/v1/tickets', [
+        'subject' => 'Is this available in blue?',
+        'message' => 'Hello, I would like to know if this comes in blue.',
+        'category' => 'product',
+        'productId' => $product->id,
+    ])->assertCreated();
+
+    $ticket = Ticket::firstOrFail();
+    expect($ticket->seller_id)->toBe($seller->id)
+        ->and($ticket->shop_id)->toBe($shop->id)
+        ->and($ticket->status)->toBe('open')
+        ->and($ticket->reference)->toStartWith('TKT-')
+        ->and($ticket->messages()->count())->toBe(1);
+
+    $response->assertJsonPath('data.shopName', 'Seller One Shop')
+        ->assertJsonPath('data.messages.0.body', 'Hello, I would like to know if this comes in blue.');
+
+    // Both sides are told.
+    Notification::assertSentTo($seller, TicketOpenedNotification::class);
+    Notification::assertSentTo($buyer, TicketOpenedNotification::class);
+});
+
+test('a ticket with no shop attached goes to the administrators', function () {
+    Notification::fake();
+    $admin = User::factory()->create(['role' => 'master']);
+    $buyer = User::factory()->create();
+
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', [
+        'subject' => 'I cannot update my account',
+        'message' => 'My profile will not save.',
+        'category' => 'account',
+    ])->assertCreated();
+
+    expect(Ticket::first()->seller_id)->toBeNull();
+    Notification::assertSentTo($admin, TicketOpenedNotification::class);
+});
+
+test('a seller only sees tickets addressed to their own shop', function () {
+    Notification::fake();
+    [$sellerA, , $productA] = sellerWithProduct('jersey-a');
+    [$sellerB, , $productB] = sellerWithProduct('jersey-b');
+    $buyer = User::factory()->create();
+
+    $this->actingAs($buyer);
+    $this->postJson('/api/v1/tickets', ['subject' => 'For A', 'message' => 'hi A', 'productId' => $productA->id])->assertCreated();
+    $this->postJson('/api/v1/tickets', ['subject' => 'For B', 'message' => 'hi B', 'productId' => $productB->id])->assertCreated();
+
+    $forA = Ticket::where('subject', 'For A')->firstOrFail();
+    $forB = Ticket::where('subject', 'For B')->firstOrFail();
+
+    $this->actingAs($sellerA)->getJson('/api/v1/tickets')
+        ->assertOk()
+        ->assertJsonPath('data.meta.total', 1)
+        ->assertJsonPath('data.tickets.0.subject', 'For A');
+
+    $this->actingAs($sellerA)->getJson("/api/v1/tickets/{$forB->id}")->assertNotFound();
+    $this->actingAs($sellerA)->postJson("/api/v1/tickets/{$forB->id}/messages", ['message' => 'sneaking in'])->assertNotFound();
+    $this->actingAs($sellerA)->getJson("/api/v1/tickets/{$forA->id}")->assertOk();
+
+    expect($forB->messages()->count())->toBe(1);
+});
+
+test('a customer cannot read another customer ticket', function () {
+    Notification::fake();
+    [, , $product] = sellerWithProduct();
+    $buyer = User::factory()->create();
+    $stranger = User::factory()->create();
+
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', ['subject' => 'Mine', 'message' => 'private', 'productId' => $product->id])->assertCreated();
+    $ticket = Ticket::firstOrFail();
+
+    $this->actingAs($stranger)->getJson('/api/v1/tickets')->assertOk()->assertJsonPath('data.meta.total', 0);
+    $this->actingAs($stranger)->getJson("/api/v1/tickets/{$ticket->id}")->assertNotFound();
+});
+
+test('replies move the ticket between the customer and the shop', function () {
+    Notification::fake();
+    [$seller, , $product] = sellerWithProduct();
+    $buyer = User::factory()->create();
+
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', ['subject' => 'Help', 'message' => 'first', 'productId' => $product->id])->assertCreated();
+    $ticket = Ticket::firstOrFail();
+
+    // Shop answers -> waiting on the customer.
+    $this->actingAs($seller)->postJson("/api/v1/tickets/{$ticket->id}/messages", ['message' => 'Yes we have it'])->assertCreated();
+    expect($ticket->refresh()->status)->toBe('pending');
+    Notification::assertSentTo($buyer, TicketRepliedNotification::class);
+
+    // Customer answers -> back to the shop.
+    $this->actingAs($buyer)->postJson("/api/v1/tickets/{$ticket->id}/messages", ['message' => 'Great, thanks'])->assertCreated();
+    expect($ticket->refresh()->status)->toBe('open')
+        ->and($ticket->messages()->count())->toBe(3);
+    Notification::assertSentTo($seller, TicketRepliedNotification::class);
+});
+
+test('internal notes are visible to the shop but never to the customer', function () {
+    Notification::fake();
+    [$seller, , $product] = sellerWithProduct();
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', ['subject' => 'Help', 'message' => 'first', 'productId' => $product->id])->assertCreated();
+    $ticket = Ticket::firstOrFail();
+
+    $this->actingAs($seller)->postJson("/api/v1/tickets/{$ticket->id}/messages", ['message' => 'Check stock before replying', 'isInternal' => true])->assertCreated();
+
+    $this->actingAs($seller)->getJson("/api/v1/tickets/{$ticket->id}")->assertOk()->assertJsonCount(2, 'data.messages');
+    $customerView = $this->actingAs($buyer)->getJson("/api/v1/tickets/{$ticket->id}")->assertOk();
+    $customerView->assertJsonCount(1, 'data.messages');
+    expect(collect($customerView->json('data.messages'))->pluck('body'))->not->toContain('Check stock before replying');
+
+    // An internal note is not an answer, so the customer is not emailed.
+    Notification::assertNotSentTo($buyer, TicketRepliedNotification::class);
+});
+
+test('a customer cannot disguise a reply as an internal note', function () {
+    Notification::fake();
+    [, , $product] = sellerWithProduct();
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', ['subject' => 'Help', 'message' => 'first', 'productId' => $product->id])->assertCreated();
+    $ticket = Ticket::firstOrFail();
+
+    $this->actingAs($buyer)->postJson("/api/v1/tickets/{$ticket->id}/messages", ['message' => 'not really internal', 'isInternal' => true])->assertCreated();
+
+    expect($ticket->messages()->latest('id')->first()->is_internal)->toBeFalse();
+});
+
+test('a customer may resolve or reopen their ticket but not set priority', function () {
+    Notification::fake();
+    [$seller, , $product] = sellerWithProduct();
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', ['subject' => 'Help', 'message' => 'first', 'productId' => $product->id])->assertCreated();
+    $ticket = Ticket::firstOrFail();
+
+    $this->actingAs($buyer)->patchJson("/api/v1/tickets/{$ticket->id}", ['status' => 'resolved'])->assertOk();
+    expect($ticket->refresh()->status)->toBe('resolved')->and($ticket->closed_at)->not->toBeNull();
+
+    $this->actingAs($buyer)->patchJson("/api/v1/tickets/{$ticket->id}", ['priority' => 'high'])->assertStatus(403);
+    $this->actingAs($buyer)->patchJson("/api/v1/tickets/{$ticket->id}", ['status' => 'closed'])->assertStatus(403);
+
+    // The shop has the full set.
+    $this->actingAs($seller)->patchJson("/api/v1/tickets/{$ticket->id}", ['status' => 'closed', 'priority' => 'high'])->assertOk();
+    expect($ticket->refresh()->status)->toBe('closed');
+});
+
+test('a closed ticket cannot receive new replies', function () {
+    Notification::fake();
+    [$seller, , $product] = sellerWithProduct();
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', ['subject' => 'Help', 'message' => 'first', 'productId' => $product->id])->assertCreated();
+    $ticket = Ticket::firstOrFail();
+    $this->actingAs($seller)->patchJson("/api/v1/tickets/{$ticket->id}", ['status' => 'closed'])->assertOk();
+
+    $this->actingAs($buyer)->postJson("/api/v1/tickets/{$ticket->id}/messages", ['message' => 'one more thing'])->assertStatus(422);
+});
+
+test('an administrator can see and answer any ticket', function () {
+    Notification::fake();
+    [, , $product] = sellerWithProduct();
+    $admin = User::factory()->create(['role' => 'admin']);
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', ['subject' => 'Help', 'message' => 'first', 'productId' => $product->id])->assertCreated();
+    $ticket = Ticket::firstOrFail();
+
+    $this->actingAs($admin)->getJson('/api/v1/tickets')->assertOk()->assertJsonPath('data.meta.total', 1);
+    $this->actingAs($admin)->postJson("/api/v1/tickets/{$ticket->id}/messages", ['message' => 'Support here, looking into it'])->assertCreated();
+
+    expect($ticket->refresh()->status)->toBe('pending');
+    Notification::assertSentTo($buyer, TicketRepliedNotification::class);
+});
+
+test('a customer cannot attach someone else order to a ticket', function () {
+    Notification::fake();
+    $buyer = User::factory()->create();
+    $otherBuyer = User::factory()->create();
+    $order = Order::create(['number' => 'ANA-TICKET-1', 'user_id' => $otherBuyer->id, 'subtotal' => 1000, 'total' => 1000, 'status' => 'pending', 'shipping_details' => []]);
+
+    $this->actingAs($buyer)->postJson('/api/v1/tickets', ['subject' => 'About an order', 'message' => 'hmm', 'orderId' => $order->id])->assertCreated();
+
+    expect(Ticket::first()->order_id)->toBeNull();
+});
+
+test('tickets can be searched and filtered by status', function () {
+    Notification::fake();
+    [$seller, , $product] = sellerWithProduct();
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer);
+    $this->postJson('/api/v1/tickets', ['subject' => 'Broken zip', 'message' => 'a', 'productId' => $product->id])->assertCreated();
+    $this->postJson('/api/v1/tickets', ['subject' => 'Late delivery', 'message' => 'b', 'productId' => $product->id])->assertCreated();
+    $first = Ticket::where('subject', 'Broken zip')->firstOrFail();
+    $this->actingAs($seller)->patchJson("/api/v1/tickets/{$first->id}", ['status' => 'resolved'])->assertOk();
+
+    $this->actingAs($buyer)->getJson('/api/v1/tickets?search=zip')->assertOk()->assertJsonPath('data.meta.total', 1);
+    $this->actingAs($buyer)->getJson('/api/v1/tickets?status=active')->assertOk()->assertJsonPath('data.meta.total', 1);
+    $this->actingAs($buyer)->getJson('/api/v1/tickets')->assertOk()->assertJsonPath('data.counts.resolved', 1);
+});
+
+test('the ticket emails render without blade errors', function () {
+    [$seller, , $product] = sellerWithProduct();
+    $buyer = User::factory()->create(['name' => 'Buyer One']);
+    $ticket = Ticket::create([
+        'reference' => 'TKT-RENDER-1', 'user_id' => $buyer->id, 'seller_id' => $seller->id,
+        'subject' => 'Is this available?', 'category' => 'product', 'product_id' => $product->id, 'last_message_at' => now(),
+    ]);
+
+    $toShop = renderMail((new TicketOpenedNotification($ticket, 'Do you have it in blue?', 'shop'))->toMail($seller));
+    $toCustomer = renderMail((new TicketOpenedNotification($ticket, 'Do you have it in blue?', 'customer'))->toMail($buyer));
+    $reply = renderMail((new TicketRepliedNotification($ticket, 'Yes we do.', 'Seller One'))->toMail($buyer));
+
+    expect($toShop)->toContain('TKT-RENDER-1')->toContain('Do you have it in blue?')
+        ->and($toCustomer)->toContain('TKT-RENDER-1')
+        ->and($reply)->toContain('Seller One')->toContain('Yes we do.');
 });
