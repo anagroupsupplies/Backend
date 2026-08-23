@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Order;
+use App\Models\Setting;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -19,6 +20,21 @@ class MalipoPayService
     public function isConfigured(): bool
     {
         return (string) config('services.malipopay.api_token') !== '';
+    }
+
+    /** The master admin switch for mobile money collections. */
+    public function isEnabled(): bool
+    {
+        return (bool) (Setting::general()['mobileMoneyEnabled'] ?? true);
+    }
+
+    /**
+     * Mobile money can only be offered when an administrator has switched it on
+     * AND the gateway credentials are present.
+     */
+    public function isAvailable(): bool
+    {
+        return $this->isEnabled() && $this->isConfigured();
     }
 
     /**

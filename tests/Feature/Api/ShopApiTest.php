@@ -5,6 +5,7 @@ use App\Models\CartItem;
 use App\Models\Category;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\Setting;
 use App\Models\Shop;
 use App\Models\User;
 use App\Notifications\NewOrderForSellerNotification;
@@ -558,4 +559,94 @@ test('the status update email renders for every status', function () {
         $rendered = renderMail((new OrderStatusUpdatedNotification($order, $status, 'Shop One'))->toMail($buyer));
         expect($rendered)->toContain('ANA-STATUS-MAIL')->toContain('Shop One');
     }
+});
+
+test('the master admin can switch mobile money off and on', function () {
+    config(['services.malipopay.api_token' => 'mp_sk_test']);
+    $master = User::factory()->create(['role' => 'master']);
+    $this->actingAs($master);
+
+    // On by default once credentials exist.
+    $this->getJson('/api/v1/settings')->assertOk()->assertJsonPath('data.mobileMoneyAvailable', true);
+
+    $this->patchJson('/api/v1/admin/settings/mobile-money', ['enabled' => false])
+        ->assertOk()
+        ->assertJsonPath('data.mobileMoneyEnabled', false)
+        ->assertJsonPath('data.mobileMoneyAvailable', false);
+
+    $this->getJson('/api/v1/settings')->assertOk()->assertJsonPath('data.mobileMoneyEnabled', false);
+
+    $this->patchJson('/api/v1/admin/settings/mobile-money', ['enabled' => true])
+        ->assertOk()
+        ->assertJsonPath('data.mobileMoneyAvailable', true);
+});
+
+test('switching mobile money off blocks checkout server side even if the client still asks for it', function () {
+    Notification::fake();
+    config(['services.malipopay.api_token' => 'mp_sk_test']);
+    Http::fake();
+    Setting::putGeneral(['mobileMoneyEnabled' => false]);
+
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey-off', 'price' => 50000, 'stock' => 4]);
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'none', 'quantity' => 1]);
+    $this->actingAs($user);
+
+    $this->postJson('/api/v1/checkout', [
+        'shippingDetails' => [
+            'fullName' => 'Test Customer', 'email' => 'customer@example.com', 'phone' => '0712345678',
+            'streetAddress' => '1 Test Street', 'city' => 'Dar es Salaam', 'state' => 'Dar es Salaam',
+            'postalCode' => '11101', 'country' => 'Tanzania',
+        ],
+        'paymentMethod' => 'mobile_money',
+    ])->assertStatus(503);
+
+    Http::assertNothingSent();
+    expect(Order::count())->toBe(0);
+});
+
+test('pay on delivery still works while mobile money is switched off', function () {
+    Notification::fake();
+    Setting::putGeneral(['mobileMoneyEnabled' => false]);
+
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey-cod', 'price' => 50000, 'stock' => 4]);
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'none', 'quantity' => 1]);
+    $this->actingAs($user);
+
+    $this->postJson('/api/v1/checkout', ['shippingDetails' => [
+        'fullName' => 'Test Customer', 'email' => 'customer@example.com', 'phone' => '0712345678',
+        'streetAddress' => '1 Test Street', 'city' => 'Dar es Salaam', 'state' => 'Dar es Salaam',
+        'postalCode' => '11101', 'country' => 'Tanzania',
+    ]])->assertCreated()->assertJsonPath('data.paymentMethod', 'cash_on_delivery');
+});
+
+test('mobile money reports unavailable when switched on but credentials are missing', function () {
+    config(['services.malipopay.api_token' => '']);
+    Setting::putGeneral(['mobileMoneyEnabled' => true]);
+
+    $this->getJson('/api/v1/settings')
+        ->assertOk()
+        ->assertJsonPath('data.mobileMoneyEnabled', true)
+        ->assertJsonPath('data.mobileMoneyConfigured', false)
+        ->assertJsonPath('data.mobileMoneyAvailable', false);
+});
+
+test('a non master administrator cannot switch mobile money', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+
+    $this->actingAs($admin)->patchJson('/api/v1/admin/settings/mobile-money', ['enabled' => false])->assertStatus(403);
+
+    expect(Setting::general()['mobileMoneyEnabled'])->toBeTrue();
+});
+
+test('saving general settings does not wipe the mobile money switch', function () {
+    $master = User::factory()->create(['role' => 'master']);
+    Setting::putGeneral(['mobileMoneyEnabled' => false]);
+    $this->actingAs($master);
+
+    $this->putJson('/api/v1/admin/settings', ['whatsappNumber' => '255700000001'])->assertOk();
+
+    expect(Setting::general()['mobileMoneyEnabled'])->toBeFalse()
+        ->and(Setting::general()['whatsappNumber'])->toBe('255700000001');
 });

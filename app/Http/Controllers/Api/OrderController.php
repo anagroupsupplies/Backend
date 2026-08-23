@@ -61,7 +61,7 @@ class OrderController extends Controller
         $paymentPhone = $validated['paymentPhone'] ?? $shipping['phone'];
 
         if ($payingByMobileMoney) {
-            abort_unless($this->malipoPay->isConfigured(), 503, 'Mobile money is not available right now. Please choose pay on delivery.');
+            abort_unless($this->malipoPay->isAvailable(), 503, 'Mobile money is not available right now. Please choose pay on delivery.');
             abort_unless($this->malipoPay->isValidPhone($paymentPhone), 422, 'Enter a valid Tanzanian mobile money number, for example 0712345678.');
         }
         $order = DB::transaction(function () use ($request, $shipping, $paymentMethod, $location, $paymentPhone, $payingByMobileMoney): Order {

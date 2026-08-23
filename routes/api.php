@@ -85,6 +85,7 @@ Route::prefix('v1')->group(function (): void {
                 Route::patch('users/{user}', [AdminController::class, 'updateUser']);
                 Route::delete('users/{user}', [AdminController::class, 'destroyUser']);
                 Route::put('settings', [SettingsController::class, 'update']);
+                Route::patch('settings/mobile-money', [SettingsController::class, 'updateMobileMoney']);
             });
         });
     });
