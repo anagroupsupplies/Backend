@@ -15,12 +15,14 @@ use App\Notifications\NewOrderForSellerNotification;
 use App\Notifications\OrderPaymentConfirmedNotification;
 use App\Notifications\OrderPlacedNotification;
 use App\Notifications\OrderStatusUpdatedNotification;
+use App\Notifications\ResetPasswordNotification;
 use App\Notifications\TicketOpenedNotification;
 use App\Notifications\TicketRepliedNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
@@ -1161,4 +1163,69 @@ test('the ticket emails render without blade errors', function () {
     expect($toShop)->toContain('TKT-RENDER-1')->toContain('Do you have it in blue?')
         ->and($toCustomer)->toContain('TKT-RENDER-1')
         ->and($reply)->toContain('Seller One')->toContain('Yes we do.');
+});
+
+test('a password reset email links to the admin panel for admins and the storefront for customers', function () {
+    config(['app.frontend_url' => 'https://antenkayume.com', 'app.admin_url' => 'https://admin.antenkayume.com']);
+    $admin = User::factory()->create(['role' => 'master', 'email' => 'boss@example.com']);
+    $customer = User::factory()->create(['email' => 'shopper@example.com']);
+
+    $adminMail = renderMail((new ResetPasswordNotification('tok-admin'))->toMail($admin));
+    $customerMail = renderMail((new ResetPasswordNotification('tok-customer'))->toMail($customer));
+
+    expect($adminMail)->toContain('https://admin.antenkayume.com/reset-password?token=tok-admin')
+        ->and($adminMail)->not->toContain('localhost')
+        ->and($customerMail)->toContain('https://antenkayume.com/reset-password?token=tok-customer')
+        ->and($customerMail)->not->toContain('admin.antenkayume.com');
+});
+
+test('an administrator can request a password reset', function () {
+    Notification::fake();
+    $admin = User::factory()->create(['role' => 'admin', 'email' => 'boss@example.com']);
+
+    $this->postJson('/api/v1/auth/forgot-password', ['email' => 'boss@example.com'])->assertOk();
+
+    Notification::assertSentTo($admin, ResetPasswordNotification::class);
+});
+
+test('an administrator can complete a password reset and sign in with the new password', function () {
+    $admin = User::factory()->create(['role' => 'master', 'email' => 'boss@example.com', 'password' => 'old-password-123']);
+    $token = Password::createToken($admin);
+
+    $this->postJson('/api/v1/auth/reset-password', [
+        'token' => $token,
+        'email' => 'boss@example.com',
+        'password' => 'brand-new-pass-9',
+        'password_confirmation' => 'brand-new-pass-9',
+    ])->assertOk();
+
+    $this->postJson('/api/v1/auth/login', ['email' => 'boss@example.com', 'password' => 'old-password-123'])->assertStatus(422);
+    $this->postJson('/api/v1/auth/login', ['email' => 'boss@example.com', 'password' => 'brand-new-pass-9'])
+        ->assertOk()
+        ->assertJsonPath('data.user.role', 'master');
+});
+
+test('no outgoing email links to localhost once the public urls are configured', function () {
+    config(['app.frontend_url' => 'https://antenkayume.com', 'app.admin_url' => 'https://admin.antenkayume.com']);
+    $buyer = User::factory()->create(['name' => 'Buyer One']);
+    $seller = User::factory()->create(['role' => 'seller', 'name' => 'Seller One']);
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey-urls', 'price' => 50000, 'stock' => 4, 'seller_id' => $seller->id]);
+    $order = Order::create(['number' => 'ANA-URL-1', 'user_id' => $buyer->id, 'subtotal' => 50000, 'total' => 50000, 'status' => 'pending', 'shipping_details' => ['fullName' => 'Buyer One'], 'delivery_latitude' => -6.79, 'delivery_longitude' => 39.2]);
+    $order->items()->create(['product_id' => $product->id, 'seller_id' => $seller->id, 'name' => 'Jersey', 'unit_price' => 50000, 'quantity' => 1]);
+    $order->load('items');
+    $ticket = Ticket::create(['reference' => 'TKT-URL-1', 'user_id' => $buyer->id, 'seller_id' => $seller->id, 'subject' => 'Hello', 'last_message_at' => now()]);
+
+    $rendered = [
+        renderMail((new OrderPlacedNotification($order))->toMail($buyer)),
+        renderMail((new NewOrderForSellerNotification($order, $order->items))->toMail($seller)),
+        renderMail((new OrderStatusUpdatedNotification($order, 'shipped'))->toMail($buyer)),
+        renderMail((new OrderPaymentConfirmedNotification($order))->toMail($buyer)),
+        renderMail((new TicketOpenedNotification($ticket, 'hi', 'shop'))->toMail($seller)),
+        renderMail((new TicketRepliedNotification($ticket, 'hi', 'Seller One'))->toMail($buyer)),
+        renderMail((new ResetPasswordNotification('tok'))->toMail($buyer)),
+    ];
+
+    foreach ($rendered as $index => $html) {
+        expect($html)->not->toContain('localhost', "email #{$index} still links to localhost");
+    }
 });

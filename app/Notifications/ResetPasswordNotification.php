@@ -19,8 +19,10 @@ class ResetPasswordNotification extends Notification
 
     public function toMail(object $notifiable): MailMessage
     {
-        $frontend = rtrim(config('app.frontend_url'), '/');
-        $url = $frontend.'/reset-password?token='.urlencode($this->token).'&email='.urlencode($notifiable->getEmailForPasswordReset());
+        // Administrators sign in on the admin panel, so their reset link has to
+        // land there rather than on the storefront.
+        $base = rtrim($notifiable->isAdmin() ? config('app.admin_url') : config('app.frontend_url'), '/');
+        $url = $base.'/reset-password?token='.urlencode($this->token).'&email='.urlencode($notifiable->getEmailForPasswordReset());
 
         return (new MailMessage)
             ->subject('Reset your Antenkayume Shop password')

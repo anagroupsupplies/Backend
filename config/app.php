@@ -54,7 +54,21 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
-    'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
+    /*
+    | Public address of the storefront, used to build the links in outgoing
+    | emails. FRONTEND_URLS (the CORS allow-list) is the fallback so that a
+    | deployment which forgets FRONTEND_URL still emails a real address
+    | instead of quietly linking every customer to localhost.
+    */
+    'frontend_url' => env('FRONTEND_URL')
+        ?: trim(explode(',', (string) env('FRONTEND_URLS'))[0])
+        ?: 'http://localhost:3000',
+
+    /* Public address of the administration panel. */
+    'admin_url' => env('ADMIN_URL')
+        ?: env('FRONTEND_URL')
+        ?: trim(explode(',', (string) env('FRONTEND_URLS'))[0])
+        ?: 'http://localhost:3001',
 
     /*
     |--------------------------------------------------------------------------
