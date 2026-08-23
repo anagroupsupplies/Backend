@@ -8,9 +8,23 @@ class OrderItem extends Model
 {
     protected $guarded = [];
 
+    protected $attributes = [
+        'fulfillment_status' => 'pending',
+    ];
+
     protected function casts(): array
     {
-        return ['unit_price' => 'decimal:2', 'product_snapshot' => 'array'];
+        return ['unit_price' => 'decimal:2', 'product_snapshot' => 'array', 'fulfillment_updated_at' => 'datetime'];
+    }
+
+    public function lineTotal(): float
+    {
+        return (float) $this->unit_price * $this->quantity;
+    }
+
+    public function order()
+    {
+        return $this->belongsTo(Order::class);
     }
 
     public function seller()

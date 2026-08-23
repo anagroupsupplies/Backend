@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BannerController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CatalogController;
+use App\Http\Controllers\Api\MalipoPayWebhookController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ReviewController;
@@ -23,6 +24,8 @@ Route::prefix('v1')->group(function (): void {
     Route::get('product-groups/{productGroup}', [CatalogController::class, 'group']);
     Route::get('products/{product}/reviews', [ReviewController::class, 'index']);
     Route::get('settings', [SettingsController::class, 'show']);
+    // Public: MALIPOPAY authenticates itself with an HMAC signature header.
+    Route::post('webhooks/malipopay', MalipoPayWebhookController::class)->middleware('throttle:120,1');
     Route::post('ai/chat', AiChatController::class)->middleware('throttle:20,1');
     Route::post('auth/register', [AuthController::class, 'register'])->middleware('throttle:6,1');
     Route::post('auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
@@ -48,6 +51,8 @@ Route::prefix('v1')->group(function (): void {
         Route::prefix('seller')->middleware('seller')->name('seller.')->group(function (): void {
             Route::get('dashboard', [AdminController::class, 'sellerDashboard']);
             Route::get('orders', [AdminController::class, 'sellerOrders']);
+            Route::get('orders/{order}', [AdminController::class, 'sellerOrder']);
+            Route::patch('orders/{order}/status', [AdminController::class, 'updateSellerOrderStatus']);
             Route::get('shop', [ShopController::class, 'mine']);
             Route::patch('shop', [ShopController::class, 'update']);
             Route::get('products', [CatalogController::class, 'manageableProducts']);

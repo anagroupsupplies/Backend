@@ -8,6 +8,13 @@ return [
         'master_admin_emails' => array_filter(array_map('trim', explode(',', env('MASTER_ADMIN_EMAILS', '')))),
     ],
 
+    'malipopay' => [
+        'base_url' => env('MALIPOPAY_BASE_URL', 'https://core-prod.malipopay.co.tz'),
+        'api_token' => env('MALIPOPAY_API_TOKEN'),
+        'webhook_secret' => env('MALIPOPAY_WEBHOOK_SECRET'),
+        'timeout' => (int) env('MALIPOPAY_TIMEOUT', 30),
+    ],
+
     'deepseek' => [
         'api_key' => env('DEEPSEEK_API_KEY'),
         'base_url' => env('DEEPSEEK_BASE_URL', 'https://api.deepseek.com'),

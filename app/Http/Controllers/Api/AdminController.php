@@ -11,20 +11,24 @@ use App\Models\Product;
 use App\Models\Review;
 use App\Models\Shop;
 use App\Models\User;
+use App\Services\OrderNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class AdminController extends Controller
 {
+    public function __construct(private readonly OrderNotifier $notifier) {}
+
     public function dashboard(Request $request): JsonResponse
     {
         $isMaster = $request->user()->isMaster();
         $cacheKey = $isMaster ? 'dashboard_master' : 'dashboard_admin';
 
         return response()->json(['data' => Cache::remember($cacheKey, 30, function () use ($isMaster) {
-            $data = ['productsCount' => Product::count(), 'categoriesCount' => Category::count(), 'ordersCount' => Order::count(), 'pendingOrdersCount' => Order::where('status', 'pending')->count(), 'deliveredOrdersCount' => Order::where('status', 'delivered')->count(), 'revenue' => (float) Order::where('status', 'delivered')->sum('total'), 'shopsCount' => Shop::count(), 'activeShopsCount' => Shop::where('is_active', true)->count()];
+            $data = ['productsCount' => Product::count(), 'categoriesCount' => Category::count(), 'ordersCount' => Order::count(), 'pendingOrdersCount' => Order::where('status', 'pending')->count(), 'deliveredOrdersCount' => Order::where('status', 'delivered')->count(), 'revenue' => (float) Order::paid()->sum('total'), 'pendingRevenue' => (float) Order::whereNot('payment_status', Order::PAY_STATUS_PAID)->whereNot('status', 'cancelled')->sum('total'), 'paidOrdersCount' => Order::paid()->count(), 'awaitingPaymentCount' => Order::where('payment_status', Order::PAY_STATUS_PROCESSING)->count(), 'shopsCount' => Shop::count(), 'activeShopsCount' => Shop::where('is_active', true)->count()];
             if ($isMaster) {
                 $data['usersCount'] = User::count();
                 $data['adminsCount'] = User::whereIn('role', ['admin', 'master'])->count();
@@ -76,10 +80,23 @@ class AdminController extends Controller
 
     public function updateOrder(Request $request, Order $order): JsonResponse
     {
-        $data = $request->validate(['status' => ['required', 'in:pending,confirmed,processing,shipped,delivered,cancelled']]);
+        $data = $request->validate(['status' => ['required', Rule::in(Order::STATUSES)]]);
+        $changed = $order->status !== $data['status'];
         $order->update($data);
+        // An admin override is authoritative, so every line follows it.
+        $order->items()->update(['fulfillment_status' => $data['status'], 'fulfillment_updated_at' => now()]);
 
-        return response()->json(['data' => $order]);
+        // Cash is collected at the door, so a delivered cash order is the point
+        // at which the money actually exists and may count towards revenue.
+        if ($data['status'] === 'delivered' && $order->isPaidOnDelivery() && ! $order->isPaid()) {
+            $order->markPaid((float) $order->total, channel: 'Cash on delivery');
+        }
+
+        if ($changed) {
+            $this->notifier->statusUpdated($order->refresh(), $data['status']);
+        }
+
+        return response()->json(['data' => $order->fresh()]);
     }
 
     public function track(Request $request): JsonResponse
@@ -94,26 +111,154 @@ class AdminController extends Controller
     {
         $sellerId = $request->user()->id;
         $items = OrderItem::where('seller_id', $sellerId);
+        $paidItems = (clone $items)->whereHas('order', fn ($query) => $query->paid());
+        $unpaidItems = (clone $items)->whereHas('order', fn ($query) => $query->whereNot('payment_status', Order::PAY_STATUS_PAID)->whereNot('status', 'cancelled'));
 
         return response()->json(['data' => [
             'productsCount' => Product::where('seller_id', $sellerId)->count(),
             'activeProductsCount' => Product::where('seller_id', $sellerId)->where('is_active', true)->count(),
             'lowStockProductsCount' => Product::where('seller_id', $sellerId)->where('stock', '<=', 5)->count(),
             'ordersCount' => (clone $items)->distinct('order_id')->count('order_id'),
-            'sales' => (float) (clone $items)->sum(DB::raw('unit_price * quantity')),
-            'earnings' => (float) (clone $items)->sum(DB::raw('unit_price * quantity')),
+            // Only settled money counts as sales/earnings; unpaid orders are reported separately.
+            'sales' => (float) (clone $paidItems)->sum(DB::raw('unit_price * quantity')),
+            'earnings' => (float) (clone $paidItems)->sum(DB::raw('unit_price * quantity')),
+            'pendingEarnings' => (float) $unpaidItems->sum(DB::raw('unit_price * quantity')),
             'shop' => $request->user()->shop,
         ]]);
     }
 
     public function sellerOrders(Request $request): JsonResponse
     {
-        $orders = Order::with(['user', 'items' => fn ($query) => $query->where('seller_id', $request->user()->id)])
-            ->whereHas('items', fn ($query) => $query->where('seller_id', $request->user()->id))
-            ->latest()
-            ->get();
+        $filters = $request->validate([
+            'search' => ['nullable', 'string', 'max:120'],
+            'status' => ['nullable', Rule::in(Order::STATUSES)],
+            'payment' => ['nullable', Rule::in(['paid', 'unpaid', 'processing', 'failed'])],
+            'from' => ['nullable', 'date'],
+            'to' => ['nullable', 'date', 'after_or_equal:from'],
+            'sort' => ['nullable', Rule::in(['newest', 'oldest', 'highest', 'lowest'])],
+            'perPage' => ['nullable', 'integer', 'min:5', 'max:100'],
+        ]);
 
-        return response()->json(['data' => $orders]);
+        $sellerId = $request->user()->id;
+        $mine = fn ($query) => $query->where('seller_id', $sellerId);
+
+        $query = Order::with(['user', 'items' => $mine])->whereHas('items', $mine);
+
+        if ($search = trim((string) ($filters['search'] ?? ''))) {
+            $query->where(function ($outer) use ($search, $sellerId): void {
+                $outer->where('number', 'like', "%{$search}%")
+                    ->orWhere('shipping_details', 'like', "%{$search}%")
+                    ->orWhere('payment_reference', 'like', "%{$search}%")
+                    ->orWhereHas('user', fn ($u) => $u->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%"))
+                    ->orWhereHas('items', fn ($i) => $i->where('seller_id', $sellerId)->where('name', 'like', "%{$search}%"));
+            });
+        }
+
+        // Filter on the seller's own lines, not the derived order status, so a
+        // seller sees their own progress rather than another shop's hold-up.
+        if ($status = $filters['status'] ?? null) {
+            $query->whereHas('items', fn ($i) => $i->where('seller_id', $sellerId)->where('fulfillment_status', $status));
+        }
+
+        match ($filters['payment'] ?? null) {
+            'paid' => $query->where('payment_status', Order::PAY_STATUS_PAID),
+            'unpaid' => $query->whereNot('payment_status', Order::PAY_STATUS_PAID),
+            'processing' => $query->where('payment_status', Order::PAY_STATUS_PROCESSING),
+            'failed' => $query->where('payment_status', Order::PAY_STATUS_FAILED),
+            default => null,
+        };
+
+        if ($from = $filters['from'] ?? null) {
+            $query->whereDate('created_at', '>=', $from);
+        }
+        if ($to = $filters['to'] ?? null) {
+            $query->whereDate('created_at', '<=', $to);
+        }
+
+        match ($filters['sort'] ?? 'newest') {
+            'oldest' => $query->oldest(),
+            'highest' => $query->orderByDesc('total'),
+            'lowest' => $query->orderBy('total'),
+            default => $query->latest(),
+        };
+
+        $orders = $query->paginate($filters['perPage'] ?? 15)->withQueryString();
+
+        return response()->json(['data' => [
+            'orders' => $orders->items(),
+            'meta' => ['total' => $orders->total(), 'perPage' => $orders->perPage(), 'currentPage' => $orders->currentPage(), 'lastPage' => $orders->lastPage()],
+            'summary' => $this->sellerOrderSummary($sellerId),
+        ]]);
+    }
+
+    /**
+     * Counts per fulfilment status across this seller's own order lines.
+     *
+     * @return array<string, int>
+     */
+    private function sellerOrderSummary(int $sellerId): array
+    {
+        $counts = OrderItem::where('seller_id', $sellerId)
+            ->select('fulfillment_status', DB::raw('COUNT(DISTINCT order_id) as total'))
+            ->groupBy('fulfillment_status')
+            ->pluck('total', 'fulfillment_status');
+
+        $summary = ['all' => OrderItem::where('seller_id', $sellerId)->distinct('order_id')->count('order_id')];
+        foreach (Order::STATUSES as $status) {
+            $summary[$status] = (int) ($counts[$status] ?? 0);
+        }
+
+        return $summary;
+    }
+
+    /**
+     * A seller advances only their own lines on an order. The order status is
+     * then recomputed from every seller's lines.
+     */
+    public function updateSellerOrderStatus(Request $request, Order $order): JsonResponse
+    {
+        $data = $request->validate(['status' => ['required', Rule::in(Order::SELLER_STATUSES)]]);
+        $sellerId = $request->user()->id;
+        $isAdmin = $request->user()->isAdmin();
+
+        $lines = $order->items()->when(! $isAdmin, fn ($query) => $query->where('seller_id', $sellerId));
+        abort_unless((clone $lines)->exists(), 404);
+
+        $changed = (clone $lines)->whereNot('fulfillment_status', $data['status'])->count() > 0;
+        (clone $lines)->update(['fulfillment_status' => $data['status'], 'fulfillment_updated_at' => now()]);
+
+        $order->syncStatusFromItems();
+        $order->refresh();
+
+        if ($data['status'] === 'delivered' && $order->status === 'delivered' && $order->isPaidOnDelivery() && ! $order->isPaid()) {
+            $order->markPaid((float) $order->total, channel: 'Cash on delivery');
+            $order->refresh();
+        }
+
+        if ($changed) {
+            $this->notifier->statusUpdated($order, $data['status'], $isAdmin ? null : $request->user()->shop?->name);
+        }
+
+        return response()->json(['data' => $order->load(['user', 'items' => fn ($query) => $isAdmin ? $query : $query->where('seller_id', $sellerId)])]);
+    }
+
+    /**
+     * A single order, restricted to the lines that belong to this seller. An
+     * order containing no line of theirs is a 404, so sellers cannot read
+     * another shop's order by guessing the id.
+     */
+    public function sellerOrder(Request $request, Order $order): JsonResponse
+    {
+        $sellerId = $request->user()->id;
+
+        if (! $request->user()->isAdmin()) {
+            abort_unless($order->items()->where('seller_id', $sellerId)->exists(), 404);
+            $order->load(['user', 'items' => fn ($query) => $query->where('seller_id', $sellerId)]);
+        } else {
+            $order->load(['user', 'items']);
+        }
+
+        return response()->json(['data' => $order]);
     }
 
     public function shops(): JsonResponse
