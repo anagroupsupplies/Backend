@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Order;
+use App\Services\AuditLogger;
 use App\Services\MalipoPayService;
 use App\Services\OrderNotifier;
 use Illuminate\Http\JsonResponse;
@@ -25,6 +26,7 @@ class MalipoPayWebhookController extends Controller
     public function __construct(
         private readonly MalipoPayService $malipoPay,
         private readonly OrderNotifier $notifier,
+        private readonly AuditLogger $audit,
     ) {}
 
     public function __invoke(Request $request): JsonResponse
@@ -72,6 +74,7 @@ class MalipoPayWebhookController extends Controller
             DB::transaction(fn () => $order->markPaid($amount, $transactionId, $channel));
 
             if (! $alreadyPaid) {
+                $this->audit->record('order.payment_confirmed', $order, ['amount' => $amount, 'reference' => $order->payment_reference, 'transactionId' => $transactionId, 'channel' => $channel], "Payment received for order {$order->number}");
                 $this->notifier->paymentConfirmed($order->refresh());
             }
 
@@ -85,6 +88,7 @@ class MalipoPayWebhookController extends Controller
         }
 
         if ($event === 'payment.failed' || in_array($status, self::FAILED_STATUSES, true)) {
+            $this->audit->record('order.payment_failed', $order, ['status' => $status, 'reason' => $payload['failureReason'] ?? null], "Payment failed for order {$order->number}");
             $order->forceFill([
                 'payment_status' => Order::PAY_STATUS_FAILED,
                 'payment_failure_reason' => (string) ($payload['failureReason'] ?? 'The payment was not completed.'),

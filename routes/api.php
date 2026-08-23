@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AddressController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\AiChatController;
+use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BannerController;
 use App\Http\Controllers\Api\CartController;
@@ -83,6 +84,7 @@ Route::prefix('v1')->group(function (): void {
             Route::apiResource('banners', BannerController::class)->except(['index', 'show']);
 
             Route::middleware('master')->group(function (): void {
+                Route::get('audit-logs', [AuditLogController::class, 'index']);
                 Route::get('users', [AdminController::class, 'users']);
                 Route::patch('users/{user}', [AdminController::class, 'updateUser']);
                 Route::delete('users/{user}', [AdminController::class, 'destroyUser']);

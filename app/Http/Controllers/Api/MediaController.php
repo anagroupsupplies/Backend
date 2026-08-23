@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Media;
+use App\Services\AuditLogger;
 use getID3;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -65,6 +66,7 @@ class MediaController extends Controller
     public function destroy(Media $medium): JsonResponse
     {
         abort_unless(request()->user()->isAdmin() || $medium->uploaded_by === request()->user()->id, 403, 'You can only delete media that you uploaded.');
+        app(AuditLogger::class)->record('media.deleted', $medium, ['path' => $medium->path, 'uploadedBy' => $medium->uploaded_by], "Deleted the {$medium->type} {$medium->original_name}");
         Storage::disk($medium->disk)->delete($medium->path);
         $medium->delete();
 

@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\AuthenticateFirebase;
 use App\Models\Address;
+use App\Models\AuditLog;
 use App\Models\CartItem;
 use App\Models\Category;
 use App\Models\Order;
@@ -17,6 +18,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
 
@@ -785,4 +787,148 @@ test('a customer can update their own profile including the address field', func
 
     expect($user->refresh()->name)->toBe('New Name')
         ->and($user->address)->toBe('Mikocheni B, Dar es Salaam');
+});
+
+test('only the master admin can read the audit trail', function () {
+    $master = User::factory()->create(['role' => 'master']);
+    $admin = User::factory()->create(['role' => 'admin']);
+    $seller = User::factory()->create(['role' => 'seller']);
+    $buyer = User::factory()->create();
+
+    $this->actingAs($buyer)->getJson('/api/v1/admin/audit-logs')->assertStatus(403);
+    $this->actingAs($seller)->getJson('/api/v1/admin/audit-logs')->assertStatus(403);
+    $this->actingAs($admin)->getJson('/api/v1/admin/audit-logs')->assertStatus(403);
+    $this->actingAs($master)->getJson('/api/v1/admin/audit-logs')->assertOk();
+});
+
+test('a role change is recorded with who did it and what changed', function () {
+    $master = User::factory()->create(['role' => 'master', 'name' => 'Master One', 'email' => 'master@example.com']);
+    $target = User::factory()->create(['role' => 'user', 'email' => 'target@example.com']);
+
+    $this->actingAs($master)->patchJson("/api/v1/admin/users/{$target->id}", ['role' => 'seller'])->assertOk();
+
+    $log = AuditLog::where('action', 'user.role_changed')->firstOrFail();
+    expect($log->actor_email)->toBe('master@example.com')
+        ->and($log->actor_role)->toBe('master')
+        ->and($log->user_id)->toBe($master->id)
+        ->and($log->auditable_id)->toBe($target->id)
+        ->and($log->changes['role']['from'])->toBe('user')
+        ->and($log->changes['role']['to'])->toBe('seller')
+        ->and($log->ip_address)->not->toBeNull();
+});
+
+test('suspending an account and deleting one are both recorded', function () {
+    $master = User::factory()->create(['role' => 'master']);
+    $target = User::factory()->create(['email' => 'victim@example.com']);
+    $this->actingAs($master);
+
+    $this->patchJson("/api/v1/admin/users/{$target->id}", ['isActive' => false])->assertOk();
+    $this->deleteJson("/api/v1/admin/users/{$target->id}")->assertNoContent();
+
+    expect(AuditLog::where('action', 'user.status_changed')->count())->toBe(1)
+        // The deleted account's details survive in the trail.
+        ->and(AuditLog::where('action', 'user.deleted')->first()->changes['email'])->toBe('victim@example.com');
+});
+
+test('toggling mobile money is recorded for oversight', function () {
+    $master = User::factory()->create(['role' => 'master']);
+
+    $this->actingAs($master)->patchJson('/api/v1/admin/settings/mobile-money', ['enabled' => false])->assertOk();
+
+    $log = AuditLog::where('action', 'settings.mobile_money_toggled')->firstOrFail();
+    expect($log->changes['mobileMoneyEnabled']['to'])->toBeFalse()
+        ->and($log->description)->toContain('OFF');
+});
+
+test('a product price change is recorded', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey-audit', 'price' => 50000, 'stock' => 4]);
+
+    $this->actingAs($admin)->patchJson("/api/v1/admin/products/{$product->id}", ['price' => 75000])->assertOk();
+
+    $log = AuditLog::where('action', 'product.updated')->firstOrFail();
+    expect((float) $log->changes['price']['from'])->toBe(50000.0)
+        ->and((float) $log->changes['price']['to'])->toBe(75000.0);
+});
+
+test('an order status change is recorded against the order', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $buyer = User::factory()->create();
+    $order = Order::create(['number' => 'ANA-AUDIT-1', 'user_id' => $buyer->id, 'subtotal' => 1000, 'total' => 1000, 'status' => 'pending', 'shipping_details' => []]);
+    Notification::fake();
+
+    $this->actingAs($admin)->patchJson("/api/v1/admin/orders/{$order->id}", ['status' => 'shipped'])->assertOk();
+
+    $log = AuditLog::where('action', 'order.status_changed')->firstOrFail();
+    expect($log->changes['status']['from'])->toBe('pending')
+        ->and($log->changes['status']['to'])->toBe('shipped')
+        ->and($log->auditable_id)->toBe($order->id);
+});
+
+test('a confirmed payment is recorded against the system actor', function () {
+    Notification::fake();
+    config(['services.malipopay.webhook_secret' => 'shhh']);
+    $order = paidOrderFor(User::factory()->create());
+
+    [$body, $server] = malipoWebhook(['event' => 'payment.confirmed', 'status' => 'SUCCESSFUL', 'customerReference' => $order->number, 'amount' => 50000, 'transactionId' => 'MP250001234567']);
+    $this->call('POST', '/api/v1/webhooks/malipopay', [], [], [], $server, $body)->assertOk();
+
+    $log = AuditLog::where('action', 'order.payment_confirmed')->firstOrFail();
+    expect($log->user_id)->toBeNull()
+        ->and($log->actor_name)->toBe('System')
+        ->and($log->actor_role)->toBe('system')
+        ->and((float) $log->changes['amount'])->toBe(50000.0);
+});
+
+test('an administrator sign in is recorded but a customer sign in is not', function () {
+    User::factory()->create(['email' => 'boss@example.com', 'password' => 'password123', 'role' => 'master']);
+    User::factory()->create(['email' => 'shopper@example.com', 'password' => 'password123', 'role' => 'user']);
+
+    $this->postJson('/api/v1/auth/login', ['email' => 'boss@example.com', 'password' => 'password123'])->assertOk();
+    $this->postJson('/api/v1/auth/login', ['email' => 'shopper@example.com', 'password' => 'password123'])->assertOk();
+
+    expect(AuditLog::where('action', 'auth.admin_signed_in')->count())->toBe(1)
+        ->and(AuditLog::where('action', 'auth.admin_signed_in')->first()->actor_email)->toBe('boss@example.com');
+});
+
+test('audit entries cannot be edited or deleted, even in code', function () {
+    $log = AuditLog::create(['action' => 'settings.updated', 'actor_name' => 'Master One', 'created_at' => now()]);
+
+    expect(fn () => $log->update(['action' => 'product.created']))->toThrow(RuntimeException::class)
+        ->and(fn () => $log->delete())->toThrow(RuntimeException::class)
+        ->and(AuditLog::find($log->id)->action)->toBe('settings.updated');
+});
+
+test('the audit trail can be searched and filtered by action', function () {
+    $master = User::factory()->create(['role' => 'master', 'name' => 'Master One']);
+    $target = User::factory()->create(['email' => 'needle@example.com']);
+    $this->actingAs($master);
+
+    $this->patchJson("/api/v1/admin/users/{$target->id}", ['role' => 'seller'])->assertOk();
+    $this->patchJson('/api/v1/admin/settings/mobile-money', ['enabled' => false])->assertOk();
+
+    $this->getJson('/api/v1/admin/audit-logs?action=user.role_changed')
+        ->assertOk()
+        ->assertJsonPath('data.meta.total', 1)
+        ->assertJsonPath('data.logs.0.action', 'user.role_changed');
+
+    $this->getJson('/api/v1/admin/audit-logs?search=needle@example.com')
+        ->assertOk()
+        ->assertJsonPath('data.meta.total', 1);
+
+    $all = $this->getJson('/api/v1/admin/audit-logs')->assertOk()->assertJsonPath('data.meta.total', 2)->json('data');
+    // Action keys contain dots, so read the counts rather than using a JSON path.
+    expect($all['actions']['settings.mobile_money_toggled'])->toBe(1)
+        ->and($all['actions']['user.role_changed'])->toBe(1);
+});
+
+test('a failure to write the audit trail never breaks the action itself', function () {
+    $master = User::factory()->create(['role' => 'master']);
+    $target = User::factory()->create();
+    // Simulate the audit table being unavailable.
+    Schema::drop('audit_logs');
+
+    $this->actingAs($master)->patchJson("/api/v1/admin/users/{$target->id}", ['role' => 'seller'])->assertOk();
+
+    expect($target->refresh()->role)->toBe('seller');
 });

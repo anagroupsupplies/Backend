@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\ApiToken;
 use App\Models\User;
+use App\Services\AuditLogger;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -58,6 +59,12 @@ class AuthController extends Controller
             return response()->json(['message' => 'This account is inactive.'], 403);
         }
         $user->update(['last_login_at' => now()]);
+
+        // Only privileged sign-ins are recorded; logging every customer login
+        // would bury the entries that actually matter for oversight.
+        if ($user->isAdmin()) {
+            app(AuditLogger::class)->record('auth.admin_signed_in', $user, [], "{$user->email} signed in", $user);
+        }
 
         return response()->json(['data' => $this->authenticationData($user, $data['remember'] ?? false)]);
     }

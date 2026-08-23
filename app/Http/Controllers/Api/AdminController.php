@@ -11,6 +11,7 @@ use App\Models\Product;
 use App\Models\Review;
 use App\Models\Shop;
 use App\Models\User;
+use App\Services\AuditLogger;
 use App\Services\OrderNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,7 +21,10 @@ use Illuminate\Validation\Rule;
 
 class AdminController extends Controller
 {
-    public function __construct(private readonly OrderNotifier $notifier) {}
+    public function __construct(
+        private readonly OrderNotifier $notifier,
+        private readonly AuditLogger $audit,
+    ) {}
 
     public function dashboard(Request $request): JsonResponse
     {
@@ -60,7 +64,17 @@ class AdminController extends Controller
         if (array_key_exists('isActive', $data)) {
             $data['is_active'] = $data['isActive'];
             unset($data['isActive']);
-        } $user->update($data);
+        }
+        $before = ['role' => $user->role, 'is_active' => $user->is_active];
+        $user->update($data);
+        $changes = $this->audit->diff($before, ['role' => $user->role, 'is_active' => $user->is_active]);
+
+        if (array_key_exists('role', $changes)) {
+            $this->audit->record('user.role_changed', $user, ['role' => $changes['role']], "Changed {$user->email} from {$changes['role']['from']} to {$changes['role']['to']}");
+        }
+        if (array_key_exists('is_active', $changes)) {
+            $this->audit->record('user.status_changed', $user, ['is_active' => $changes['is_active']], ($user->is_active ? 'Activated ' : 'Suspended ').$user->email);
+        }
 
         return response()->json(['message' => 'User updated.']);
     }
@@ -68,6 +82,9 @@ class AdminController extends Controller
     public function destroyUser(Request $request, User $user): JsonResponse
     {
         abort_if($request->user()->is($user), 422, 'You cannot delete your own account.');
+        // Recorded before deletion so the trail keeps the details of the
+        // account that no longer exists.
+        $this->audit->record('user.deleted', $user, ['role' => $user->role, 'email' => $user->email], "Deleted the account {$user->email}");
         $user->delete();
 
         return response()->json([], 204);
@@ -81,7 +98,8 @@ class AdminController extends Controller
     public function updateOrder(Request $request, Order $order): JsonResponse
     {
         $data = $request->validate(['status' => ['required', Rule::in(Order::STATUSES)]]);
-        $changed = $order->status !== $data['status'];
+        $previousStatus = $order->status;
+        $changed = $previousStatus !== $data['status'];
         $order->update($data);
         // An admin override is authoritative, so every line follows it.
         $order->items()->update(['fulfillment_status' => $data['status'], 'fulfillment_updated_at' => now()]);
@@ -93,6 +111,7 @@ class AdminController extends Controller
         }
 
         if ($changed) {
+            $this->audit->record('order.status_changed', $order, ['status' => ['from' => $previousStatus, 'to' => $data['status']]], "Order {$order->number}: {$previousStatus} → {$data['status']}");
             $this->notifier->statusUpdated($order->refresh(), $data['status']);
         }
 
@@ -236,6 +255,7 @@ class AdminController extends Controller
         }
 
         if ($changed) {
+            $this->audit->record('order.status_changed', $order, ['status' => ['to' => $data['status']], 'scope' => $isAdmin ? 'all items' : 'own items'], "Order {$order->number}: marked {$data['status']}");
             $this->notifier->statusUpdated($order, $data['status'], $isAdmin ? null : $request->user()->shop?->name);
         }
 
@@ -288,7 +308,12 @@ class AdminController extends Controller
                 unset($data[$key]);
             }
         }
+        $wasActive = $shop->is_active;
         $shop->update([...$data, 'settings' => $settings]);
+
+        if (array_key_exists('is_active', $data) && $wasActive !== $shop->is_active) {
+            $this->audit->record('shop.status_changed', $shop, ['is_active' => ['from' => $wasActive, 'to' => $shop->is_active]], ($shop->is_active ? 'Activated ' : 'Suspended ')."the shop {$shop->name}");
+        }
 
         return response()->json(['data' => $shop]);
     }
@@ -300,6 +325,7 @@ class AdminController extends Controller
 
     public function destroyReview(Review $review): JsonResponse
     {
+        $this->audit->record('review.deleted', $review, ['rating' => $review->rating, 'comment' => $review->comment], "Deleted a review on product #{$review->product_id}");
         $review->delete();
 
         return response()->json([], 204);

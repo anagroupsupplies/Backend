@@ -4,13 +4,17 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
+use App\Services\AuditLogger;
 use App\Services\MalipoPayService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class SettingsController extends Controller
 {
-    public function __construct(private readonly MalipoPayService $malipoPay) {}
+    public function __construct(
+        private readonly MalipoPayService $malipoPay,
+        private readonly AuditLogger $audit,
+    ) {}
 
     public function show(): JsonResponse
     {
@@ -26,7 +30,12 @@ class SettingsController extends Controller
             'supportPhone' => ['nullable', 'string', 'max:30'],
             'mobileMoneyEnabled' => ['sometimes', 'boolean'],
         ]);
+        $before = Setting::general();
         Setting::putGeneral($data);
+
+        if ($changes = $this->audit->diff($before, Setting::general())) {
+            $this->audit->record('settings.updated', null, $changes, 'Updated global shop settings');
+        }
 
         return response()->json(['data' => $this->data()]);
     }
@@ -39,7 +48,12 @@ class SettingsController extends Controller
     public function updateMobileMoney(Request $request): JsonResponse
     {
         $data = $request->validate(['enabled' => ['required', 'boolean']]);
+        $was = (bool) (Setting::general()['mobileMoneyEnabled'] ?? true);
         Setting::putGeneral(['mobileMoneyEnabled' => $data['enabled']]);
+
+        if ($was !== $data['enabled']) {
+            $this->audit->record('settings.mobile_money_toggled', null, ['mobileMoneyEnabled' => ['from' => $was, 'to' => $data['enabled']]], 'Mobile money payments switched '.($data['enabled'] ? 'ON' : 'OFF'));
+        }
 
         return response()->json(['data' => $this->data()]);
     }

@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\ProductGroup;
 use App\Models\Shop;
 use App\Models\User;
+use App\Services\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -56,9 +57,12 @@ class CatalogController extends Controller
         return response()->json(['data' => $query->latest()->get()->map(fn (Product $product) => $this->productData($product))]);
     }
 
+    public function __construct(private readonly AuditLogger $audit) {}
+
     public function store(Request $request): JsonResponse
     {
         $product = Product::create($this->withOwner($request, $this->validatedProduct($request)));
+        $this->audit->record('product.created', $product, ['price' => $product->price, 'stock' => $product->stock], "Created the product {$product->name}");
         $this->clearCache();
 
         return response()->json(['data' => $this->productData($product->load(['category', 'shop']))], 201);
@@ -85,7 +89,13 @@ class CatalogController extends Controller
     public function update(Request $request, Product $product): JsonResponse
     {
         $this->assertCanManageProduct($request->user(), $product);
+        $before = ['price' => (float) $product->price, 'stock' => $product->stock, 'name' => $product->name, 'is_active' => $product->is_active, 'featured' => $product->featured];
         $product->update($this->withOwner($request, $this->validatedProduct($request, true)));
+        $product->refresh();
+
+        if ($changes = $this->audit->diff($before, ['price' => (float) $product->price, 'stock' => $product->stock, 'name' => $product->name, 'is_active' => $product->is_active, 'featured' => $product->featured])) {
+            $this->audit->record('product.updated', $product, $changes, "Updated the product {$product->name}");
+        }
         $this->clearCache($product->id);
 
         return response()->json(['data' => $this->productData($product->fresh(['category', 'shop']))]);
@@ -95,6 +105,7 @@ class CatalogController extends Controller
     {
         $this->assertCanManageProduct(request()->user(), $product);
         $productId = $product->id;
+        $this->audit->record('product.deleted', $product, ['price' => (float) $product->price, 'sellerId' => $product->seller_id], "Deleted the product {$product->name}");
         $product->delete();
         $this->clearCache($productId);
 
