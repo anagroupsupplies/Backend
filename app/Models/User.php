@@ -12,7 +12,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-#[Fillable(['firebase_uid', 'name', 'email', 'password', 'photo_url', 'phone', 'role', 'is_active', 'preferences', 'last_login_at', 'email_verified_at'])]
+#[Fillable(['firebase_uid', 'name', 'email', 'password', 'photo_url', 'phone', 'address', 'role', 'is_active', 'preferences', 'last_login_at', 'email_verified_at'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable implements MustVerifyEmail
 {
@@ -78,6 +78,11 @@ class User extends Authenticatable implements MustVerifyEmail
     public function apiTokens()
     {
         return $this->hasMany(ApiToken::class);
+    }
+
+    public function addresses()
+    {
+        return $this->hasMany(Address::class);
     }
 
     public function shop()

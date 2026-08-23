@@ -84,6 +84,7 @@ class AuthController extends Controller
         $data = $request->validate([
             'name' => ['sometimes', 'string', 'max:255'],
             'phone' => ['sometimes', 'nullable', 'string', 'max:50'],
+            'address' => ['sometimes', 'nullable', 'string', 'max:500'],
             'preferences' => ['sometimes', 'array'],
         ]);
         $request->user()->update($data);
@@ -151,7 +152,7 @@ class AuthController extends Controller
     {
         $user = $request->user();
 
-        return ['id' => $user->id, 'uid' => $user->firebase_uid ?? "local:{$user->id}", 'email' => $user->email, 'emailVerified' => $user->hasVerifiedEmail(), 'displayName' => $user->name, 'photoURL' => $user->photo_url, 'phone' => $user->phone, 'role' => $user->role, 'isAdmin' => $user->isAdmin(), 'isMaster' => $user->isMaster(), 'isActive' => $user->is_active, 'preferences' => $user->preferences, 'createdAt' => $user->created_at];
+        return ['id' => $user->id, 'uid' => $user->firebase_uid ?? "local:{$user->id}", 'email' => $user->email, 'emailVerified' => $user->hasVerifiedEmail(), 'displayName' => $user->name, 'photoURL' => $user->photo_url, 'phone' => $user->phone, 'address' => $user->address, 'role' => $user->role, 'isAdmin' => $user->isAdmin(), 'isMaster' => $user->isMaster(), 'isActive' => $user->is_active, 'preferences' => $user->preferences, 'createdAt' => $user->created_at];
     }
 
     /** @return array{token: string, user: array<string, mixed>} */

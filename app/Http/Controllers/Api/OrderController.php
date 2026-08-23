@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Address;
 use App\Models\CartItem;
 use App\Models\Order;
 use App\Models\Product;
@@ -49,6 +50,8 @@ class OrderController extends Controller
             'shippingDetails.deliveryNotes' => ['nullable', 'string', 'max:1000'],
             'paymentMethod' => ['nullable', Rule::in(Order::PAYMENT_METHODS)],
             'paymentPhone' => ['nullable', 'string', 'max:50'],
+            'saveAddress' => ['nullable', 'boolean'],
+            'addressLabel' => ['nullable', 'string', 'max:60'],
             'deliveryLocation' => ['nullable', 'array'],
             'deliveryLocation.latitude' => ['required_with:deliveryLocation', 'numeric', 'between:-90,90'],
             'deliveryLocation.longitude' => ['required_with:deliveryLocation', 'numeric', 'between:-180,180'],
@@ -85,6 +88,10 @@ class OrderController extends Controller
             return $order->load('items');
         });
 
+        if ($validated['saveAddress'] ?? false) {
+            $this->saveAddressForReuse($request, $shipping, $location, $validated['addressLabel'] ?? null);
+        }
+
         // The gateway call is deliberately made after the transaction commits so
         // a slow network round trip never holds the stock/cart row locks open.
         $paymentError = $payingByMobileMoney ? $this->requestMobileMoneyPush($order, $paymentPhone) : null;
@@ -92,6 +99,47 @@ class OrderController extends Controller
         $this->notifier->orderPlaced($order);
 
         return response()->json(['data' => [...$this->data($order), 'paymentError' => $paymentError]], 201);
+    }
+
+    /**
+     * Remember the delivery details for next time. Saving is a convenience, so
+     * a duplicate or a full address book must never fail the order itself.
+     *
+     * @param  array<string, mixed>  $shipping
+     * @param  array<string, mixed>|null  $location
+     */
+    private function saveAddressForReuse(Request $request, array $shipping, ?array $location, ?string $label): void
+    {
+        $attributes = [
+            'user_id' => $request->user()->id,
+            'full_name' => $shipping['fullName'],
+            'email' => $shipping['email'],
+            'phone' => $shipping['phone'],
+            'street_address' => $shipping['streetAddress'],
+            'city' => $shipping['city'],
+            'state' => $shipping['state'],
+            'postal_code' => $shipping['postalCode'],
+            'country' => $shipping['country'],
+        ];
+
+        $address = Address::firstOrNew($attributes);
+        $address->fill([
+            'label' => $label ?? $address->label,
+            'delivery_notes' => $shipping['deliveryNotes'] ?? null,
+            'latitude' => $location['latitude'] ?? null,
+            'longitude' => $location['longitude'] ?? null,
+            'accuracy' => $location['accuracy'] ?? null,
+        ]);
+
+        if (! $address->exists && Address::where('user_id', $request->user()->id)->count() >= 10) {
+            return;
+        }
+
+        $address->save();
+
+        if (Address::where('user_id', $request->user()->id)->where('is_default', true)->doesntExist()) {
+            $address->makeDefault();
+        }
     }
 
     /**

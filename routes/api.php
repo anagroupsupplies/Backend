@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\AddressController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\AiChatController;
 use App\Http\Controllers\Api\AuthController;
@@ -42,6 +43,7 @@ Route::prefix('v1')->group(function (): void {
         Route::apiResource('cart', CartController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::apiResource('wishlist', WishlistController::class)->only(['index', 'store', 'destroy']);
         Route::post('wishlist/{wishlistItem}/move-to-cart', [WishlistController::class, 'moveToCart']);
+        Route::apiResource('addresses', AddressController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::get('orders', [OrderController::class, 'index']);
         Route::get('orders/{order}', [OrderController::class, 'show']);
         Route::post('checkout', [OrderController::class, 'store'])->middleware('verified.api');

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AuthenticateFirebase;
+use App\Models\Address;
 use App\Models\CartItem;
 use App\Models\Category;
 use App\Models\Order;
@@ -649,4 +650,139 @@ test('saving general settings does not wipe the mobile money switch', function (
 
     expect(Setting::general()['mobileMoneyEnabled'])->toBeFalse()
         ->and(Setting::general()['whatsappNumber'])->toBe('255700000001');
+});
+
+/** @return array<string, mixed> */
+function addressPayload(array $overrides = []): array
+{
+    return [...[
+        'label' => 'Home',
+        'fullName' => 'Buyer One',
+        'email' => 'buyer@example.com',
+        'phone' => '0712345678',
+        'streetAddress' => '1 Test Street',
+        'city' => 'Dar es Salaam',
+        'state' => 'Dar es Salaam',
+        'postalCode' => '11101',
+        'country' => 'Tanzania',
+    ], ...$overrides];
+}
+
+test('a customer can save, list, update and delete their delivery addresses', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    // The first saved address becomes the default automatically.
+    $created = $this->postJson('/api/v1/addresses', addressPayload())
+        ->assertCreated()
+        ->assertJsonPath('data.label', 'Home')
+        ->assertJsonPath('data.isDefault', true)
+        ->json('data');
+
+    $this->getJson('/api/v1/addresses')->assertOk()->assertJsonCount(1, 'data');
+
+    $this->patchJson("/api/v1/addresses/{$created['id']}", ['label' => 'Office', 'city' => 'Arusha'])
+        ->assertOk()
+        ->assertJsonPath('data.label', 'Office')
+        ->assertJsonPath('data.city', 'Arusha');
+
+    $this->deleteJson("/api/v1/addresses/{$created['id']}")->assertNoContent();
+    expect(Address::count())->toBe(0);
+});
+
+test('saving a second address as default demotes the first', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $first = $this->postJson('/api/v1/addresses', addressPayload())->assertCreated()->json('data');
+    $second = $this->postJson('/api/v1/addresses', addressPayload(['label' => 'Office', 'isDefault' => true]))->assertCreated()->json('data');
+
+    expect(Address::find($first['id'])->is_default)->toBeFalse()
+        ->and(Address::find($second['id'])->is_default)->toBeTrue();
+});
+
+test('deleting the default address promotes another one', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $first = $this->postJson('/api/v1/addresses', addressPayload())->assertCreated()->json('data');
+    $this->postJson('/api/v1/addresses', addressPayload(['label' => 'Office']))->assertCreated();
+
+    $this->deleteJson("/api/v1/addresses/{$first['id']}")->assertNoContent();
+
+    expect(Address::where('user_id', $user->id)->where('is_default', true)->count())->toBe(1);
+});
+
+test('a customer cannot read or change another customer saved address', function () {
+    $owner = User::factory()->create();
+    $stranger = User::factory()->create();
+    $this->actingAs($owner);
+    $address = $this->postJson('/api/v1/addresses', addressPayload())->assertCreated()->json('data');
+
+    $this->actingAs($stranger);
+    $this->getJson('/api/v1/addresses')->assertOk()->assertJsonCount(0, 'data');
+    $this->patchJson("/api/v1/addresses/{$address['id']}", ['city' => 'Hacked'])->assertNotFound();
+    $this->deleteJson("/api/v1/addresses/{$address['id']}")->assertNotFound();
+
+    expect(Address::find($address['id'])->city)->toBe('Dar es Salaam');
+});
+
+test('checkout can save the delivery address for reuse without duplicating it', function () {
+    Notification::fake();
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey-addr', 'price' => 50000, 'stock' => 9]);
+    $this->actingAs($user);
+
+    $body = [
+        'shippingDetails' => [
+            'fullName' => 'Buyer One', 'email' => 'buyer@example.com', 'phone' => '0712345678',
+            'streetAddress' => '1 Test Street', 'city' => 'Dar es Salaam', 'state' => 'Dar es Salaam',
+            'postalCode' => '11101', 'country' => 'Tanzania', 'deliveryNotes' => 'Blue gate',
+        ],
+        'saveAddress' => true,
+        'addressLabel' => 'Home',
+        'deliveryLocation' => ['latitude' => -6.79, 'longitude' => 39.20],
+    ];
+
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'none', 'quantity' => 1]);
+    $this->postJson('/api/v1/checkout', $body)->assertCreated();
+
+    // Ordering again with the same address must not create a second copy.
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'none', 'quantity' => 1]);
+    $this->postJson('/api/v1/checkout', $body)->assertCreated();
+
+    $saved = Address::where('user_id', $user->id)->get();
+    expect($saved)->toHaveCount(1)
+        ->and($saved->first()->label)->toBe('Home')
+        ->and($saved->first()->is_default)->toBeTrue()
+        ->and((float) $saved->first()->latitude)->toBe(-6.79);
+});
+
+test('checkout does not save the address unless asked', function () {
+    Notification::fake();
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Jersey', 'slug' => 'jersey-nosave', 'price' => 50000, 'stock' => 4]);
+    CartItem::create(['user_id' => $user->id, 'product_id' => $product->id, 'selected_size' => 'none', 'quantity' => 1]);
+    $this->actingAs($user);
+
+    $this->postJson('/api/v1/checkout', ['shippingDetails' => [
+        'fullName' => 'Buyer One', 'email' => 'buyer@example.com', 'phone' => '0712345678',
+        'streetAddress' => '1 Test Street', 'city' => 'Dar es Salaam', 'state' => 'Dar es Salaam',
+        'postalCode' => '11101', 'country' => 'Tanzania',
+    ]])->assertCreated();
+
+    expect(Address::count())->toBe(0);
+});
+
+test('a customer can update their own profile including the address field', function () {
+    $user = User::factory()->create(['name' => 'Old Name']);
+    $this->actingAs($user);
+
+    $this->patchJson('/api/v1/me', ['name' => 'New Name', 'phone' => '0712345678', 'address' => 'Mikocheni B, Dar es Salaam'])
+        ->assertOk()
+        ->assertJsonPath('data.displayName', 'New Name')
+        ->assertJsonPath('data.address', 'Mikocheni B, Dar es Salaam');
+
+    expect($user->refresh()->name)->toBe('New Name')
+        ->and($user->address)->toBe('Mikocheni B, Dar es Salaam');
 });
