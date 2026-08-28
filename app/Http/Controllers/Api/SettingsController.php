@@ -29,6 +29,9 @@ class SettingsController extends Controller
             'businessEmail' => ['nullable', 'email'],
             'supportPhone' => ['nullable', 'string', 'max:30'],
             'mobileMoneyEnabled' => ['sometimes', 'boolean'],
+            'escrowEnabled' => ['sometimes', 'boolean'],
+            'escrowHoldingDays' => ['sometimes', 'integer', 'min:0', 'max:30'],
+            'commissionRate' => ['sometimes', 'numeric', 'min:0', 'max:50'],
         ]);
         $before = Setting::general();
         Setting::putGeneral($data);

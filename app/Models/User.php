@@ -85,6 +85,12 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(Address::class);
     }
 
+    /** Escrowed money belonging to this seller. */
+    public function escrowHoldings()
+    {
+        return $this->hasMany(EscrowHolding::class, 'seller_id');
+    }
+
     public function shop()
     {
         return $this->hasOne(Shop::class, 'seller_id');

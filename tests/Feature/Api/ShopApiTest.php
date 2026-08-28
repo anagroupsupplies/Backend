@@ -5,6 +5,7 @@ use App\Models\Address;
 use App\Models\AuditLog;
 use App\Models\CartItem;
 use App\Models\Category;
+use App\Models\EscrowHolding;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Setting;
@@ -18,6 +19,7 @@ use App\Notifications\OrderStatusUpdatedNotification;
 use App\Notifications\ResetPasswordNotification;
 use App\Notifications\TicketOpenedNotification;
 use App\Notifications\TicketRepliedNotification;
+use App\Services\EscrowService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\Http;
@@ -1228,4 +1230,275 @@ test('no outgoing email links to localhost once the public urls are configured',
     foreach ($rendered as $index => $html) {
         expect($html)->not->toContain('localhost', "email #{$index} still links to localhost");
     }
+});
+
+/** A paid mobile money order split across two shops. */
+function escrowOrder(User $buyer, User $sellerA, ?User $sellerB = null, string $number = 'ANA-ESC-1'): Order
+{
+    $order = Order::create([
+        'number' => $number, 'user_id' => $buyer->id, 'subtotal' => 100000, 'total' => 100000,
+        'status' => 'pending', 'shipping_details' => [], 'payment_method' => 'mobile_money',
+        'payment_status' => 'paid', 'paid_amount' => 100000, 'paid_at' => now(),
+    ]);
+    $order->items()->create(['seller_id' => $sellerA->id, 'name' => 'A item', 'unit_price' => 60000, 'quantity' => 1]);
+    if ($sellerB) {
+        $order->items()->create(['seller_id' => $sellerB->id, 'name' => 'B item', 'unit_price' => 40000, 'quantity' => 1]);
+    }
+
+    return $order->fresh();
+}
+
+test('paying for an order opens one escrow holding per shop with commission applied', function () {
+    Setting::putGeneral(['commissionRate' => 10]);
+    $buyer = User::factory()->create();
+    $sellerA = User::factory()->create(['role' => 'seller']);
+    $sellerB = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $sellerA, $sellerB);
+
+    app(EscrowService::class)->openForOrder($order);
+
+    $a = EscrowHolding::where('seller_id', $sellerA->id)->firstOrFail();
+    $b = EscrowHolding::where('seller_id', $sellerB->id)->firstOrFail();
+
+    expect(EscrowHolding::count())->toBe(2)
+        ->and((float) $a->gross_amount)->toBe(60000.0)
+        ->and((float) $a->commission_amount)->toBe(6000.0)
+        ->and((float) $a->net_amount)->toBe(54000.0)
+        ->and((float) $b->net_amount)->toBe(36000.0)
+        ->and($a->status)->toBe('held')
+        ->and($a->reference)->toStartWith('ESC-');
+});
+
+test('opening escrow twice for the same order does not double the sellers balance', function () {
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $seller);
+    $escrow = app(EscrowService::class);
+
+    $escrow->openForOrder($order);
+    $escrow->openForOrder($order->fresh());
+
+    expect(EscrowHolding::where('order_id', $order->id)->count())->toBe(1);
+});
+
+test('cash on delivery orders are never escrowed', function () {
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = Order::create(['number' => 'ANA-COD-1', 'user_id' => $buyer->id, 'subtotal' => 5000, 'total' => 5000, 'status' => 'delivered', 'shipping_details' => [], 'payment_method' => 'cash_on_delivery', 'payment_status' => 'paid', 'paid_at' => now()]);
+    $order->items()->create(['seller_id' => $seller->id, 'name' => 'x', 'unit_price' => 5000, 'quantity' => 1]);
+
+    app(EscrowService::class)->openForOrder($order->fresh());
+
+    expect(EscrowHolding::count())->toBe(0);
+});
+
+test('delivery starts the inspection window and the timer releases the money', function () {
+    Setting::putGeneral(['escrowHoldingDays' => 3, 'commissionRate' => 0]);
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $seller);
+    $escrow = app(EscrowService::class);
+    $escrow->openForOrder($order);
+
+    $escrow->markDelivered($order, $seller->id);
+    $holding = EscrowHolding::firstOrFail();
+    expect($holding->status)->toBe('pending_release')
+        ->and($holding->releasable_at->isFuture())->toBeTrue();
+
+    // Nothing is due yet.
+    expect($escrow->releaseDue())->toBe(0);
+
+    $this->travel(4)->days();
+    expect($escrow->releaseDue())->toBe(1)
+        ->and($holding->refresh()->status)->toBe('released')
+        ->and($holding->release_reason)->toBe('auto');
+});
+
+test('a buyer can confirm receipt to release the money immediately', function () {
+    Setting::putGeneral(['commissionRate' => 0]);
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $seller);
+    app(EscrowService::class)->openForOrder($order);
+    $holding = EscrowHolding::firstOrFail();
+
+    $this->actingAs($buyer)->postJson("/api/v1/escrow/{$holding->id}/confirm")
+        ->assertOk()
+        ->assertJsonPath('data.status', 'released');
+
+    expect($holding->refresh()->release_reason)->toBe('buyer_confirmed');
+});
+
+test('a disputed holding is frozen and is skipped by the auto release', function () {
+    Setting::putGeneral(['escrowHoldingDays' => 1]);
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $seller);
+    $escrow = app(EscrowService::class);
+    $escrow->openForOrder($order);
+    $escrow->markDelivered($order, $seller->id);
+    $holding = EscrowHolding::firstOrFail();
+
+    $this->actingAs($buyer)->postJson("/api/v1/escrow/{$holding->id}/dispute", ['reason' => 'The item arrived broken.'])
+        ->assertOk()
+        ->assertJsonPath('data.status', 'disputed');
+
+    $this->travel(5)->days();
+    expect($escrow->releaseDue())->toBe(0)
+        ->and($holding->refresh()->status)->toBe('disputed');
+});
+
+test('only an administrator can settle a dispute', function () {
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $admin = User::factory()->create(['role' => 'admin']);
+    $order = escrowOrder($buyer, $seller);
+    $escrow = app(EscrowService::class);
+    $escrow->openForOrder($order);
+    $holding = EscrowHolding::firstOrFail();
+    $escrow->dispute($holding, 'broken');
+
+    $this->actingAs($seller)->postJson("/api/v1/admin/escrow/{$holding->id}/resolve", ['outcome' => 'release'])->assertStatus(403);
+    $this->actingAs($buyer)->postJson("/api/v1/admin/escrow/{$holding->id}/resolve", ['outcome' => 'release'])->assertStatus(403);
+
+    $this->actingAs($admin)->postJson("/api/v1/admin/escrow/{$holding->id}/resolve", ['outcome' => 'refund', 'note' => 'Item was faulty'])
+        ->assertOk()
+        ->assertJsonPath('data.status', 'refunded');
+
+    expect($holding->refresh()->refunded_at)->not->toBeNull();
+});
+
+test('a seller cannot release their own escrowed money', function () {
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $seller);
+    app(EscrowService::class)->openForOrder($order);
+    $holding = EscrowHolding::firstOrFail();
+
+    // confirm is a buyer action; the seller is not the order's customer.
+    $this->actingAs($seller)->postJson("/api/v1/escrow/{$holding->id}/confirm")->assertNotFound();
+
+    expect($holding->refresh()->status)->toBe('held');
+});
+
+test('another customer cannot confirm or dispute someone elses escrow', function () {
+    $buyer = User::factory()->create();
+    $stranger = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $seller);
+    app(EscrowService::class)->openForOrder($order);
+    $holding = EscrowHolding::firstOrFail();
+
+    $this->actingAs($stranger)->postJson("/api/v1/escrow/{$holding->id}/confirm")->assertNotFound();
+    $this->actingAs($stranger)->postJson("/api/v1/escrow/{$holding->id}/dispute", ['reason' => 'x'])->assertNotFound();
+    $this->actingAs($stranger)->getJson('/api/v1/escrow')->assertOk()->assertJsonPath('data.meta.total', 0);
+
+    expect($holding->refresh()->status)->toBe('held');
+});
+
+test('a seller balance moves from held to available to paid out', function () {
+    Setting::putGeneral(['commissionRate' => 10, 'escrowHoldingDays' => 0]);
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $admin = User::factory()->create(['role' => 'admin']);
+    $order = escrowOrder($buyer, $seller);
+    $escrow = app(EscrowService::class);
+    $escrow->openForOrder($order);
+
+    expect($escrow->balanceFor($seller->id)['heldBalance'])->toBe(54000.0)
+        ->and($escrow->balanceFor($seller->id)['availableBalance'])->toBe(0.0);
+
+    $escrow->markDelivered($order, $seller->id);
+    $escrow->releaseDue();
+
+    expect($escrow->balanceFor($seller->id)['availableBalance'])->toBe(54000.0);
+
+    $payout = $this->actingAs($admin)->postJson('/api/v1/admin/payouts', ['sellerId' => $seller->id, 'method' => 'mobile_money', 'destination' => '255712345678'])
+        ->assertCreated()->json('data');
+    expect((float) $payout['amount'])->toBe(54000.0)
+        ->and($escrow->balanceFor($seller->id)['availableBalance'])->toBe(0.0);
+
+    $this->actingAs($admin)->patchJson("/api/v1/admin/payouts/{$payout['id']}", ['status' => 'paid'])
+        ->assertOk()->assertJsonPath('data.status', 'paid');
+
+    expect(EscrowHolding::firstOrFail()->status)->toBe('paid')
+        ->and($escrow->balanceFor($seller->id)['paidOut'])->toBe(54000.0);
+});
+
+test('cancelling a payout returns the money to the sellers available balance', function () {
+    Setting::putGeneral(['commissionRate' => 0, 'escrowHoldingDays' => 0]);
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $admin = User::factory()->create(['role' => 'admin']);
+    $order = escrowOrder($buyer, $seller);
+    $escrow = app(EscrowService::class);
+    $escrow->openForOrder($order);
+    $escrow->markDelivered($order, $seller->id);
+    $escrow->releaseDue();
+
+    $payout = $this->actingAs($admin)->postJson('/api/v1/admin/payouts', ['sellerId' => $seller->id])->assertCreated()->json('data');
+    $this->actingAs($admin)->patchJson("/api/v1/admin/payouts/{$payout['id']}", ['status' => 'cancelled'])->assertOk();
+
+    expect($escrow->balanceFor($seller->id)['availableBalance'])->toBe(60000.0)
+        ->and(EscrowHolding::firstOrFail()->payout_id)->toBeNull();
+});
+
+test('a paid payout cannot be cancelled', function () {
+    Setting::putGeneral(['escrowHoldingDays' => 0]);
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $admin = User::factory()->create(['role' => 'admin']);
+    $order = escrowOrder($buyer, $seller);
+    $escrow = app(EscrowService::class);
+    $escrow->openForOrder($order);
+    $escrow->markDelivered($order, $seller->id);
+    $escrow->releaseDue();
+    $payout = $this->actingAs($admin)->postJson('/api/v1/admin/payouts', ['sellerId' => $seller->id])->assertCreated()->json('data');
+    $this->actingAs($admin)->patchJson("/api/v1/admin/payouts/{$payout['id']}", ['status' => 'paid'])->assertOk();
+
+    $this->actingAs($admin)->patchJson("/api/v1/admin/payouts/{$payout['id']}", ['status' => 'cancelled'])->assertStatus(422);
+});
+
+test('a seller sees only their own escrow and a buyer never sees the commission', function () {
+    Setting::putGeneral(['commissionRate' => 10]);
+    $buyer = User::factory()->create();
+    $sellerA = User::factory()->create(['role' => 'seller']);
+    $sellerB = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $sellerA, $sellerB);
+    app(EscrowService::class)->openForOrder($order);
+
+    $this->actingAs($sellerA)->getJson('/api/v1/escrow')->assertOk()->assertJsonPath('data.meta.total', 1);
+
+    $buyerView = $this->actingAs($buyer)->getJson('/api/v1/escrow')->assertOk();
+    $buyerView->assertJsonPath('data.meta.total', 2)
+        ->assertJsonPath('data.holdings.0.commissionAmount', null)
+        ->assertJsonPath('data.holdings.0.netAmount', null);
+});
+
+test('escrow can be switched off by the master admin', function () {
+    Setting::putGeneral(['escrowEnabled' => false]);
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = escrowOrder($buyer, $seller);
+
+    app(EscrowService::class)->openForOrder($order);
+
+    expect(EscrowHolding::count())->toBe(0);
+});
+
+test('a mobile money webhook opens escrow for the order automatically', function () {
+    Notification::fake();
+    Setting::putGeneral(['commissionRate' => 5]);
+    config(['services.malipopay.webhook_secret' => 'shhh']);
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $order = Order::create(['number' => 'ANA-HOOK-1', 'user_id' => $buyer->id, 'subtotal' => 20000, 'total' => 20000, 'status' => 'pending', 'shipping_details' => [], 'payment_method' => 'mobile_money', 'payment_status' => 'processing', 'payment_reference' => 'ML-HOOK-1']);
+    $order->items()->create(['seller_id' => $seller->id, 'name' => 'x', 'unit_price' => 20000, 'quantity' => 1]);
+
+    [$body, $server] = malipoWebhook(['event' => 'payment.confirmed', 'status' => 'SUCCESSFUL', 'customerReference' => 'ANA-HOOK-1', 'amount' => 20000]);
+    $this->call('POST', '/api/v1/webhooks/malipopay', [], [], [], $server, $body)->assertOk();
+
+    $holding = EscrowHolding::firstOrFail();
+    expect($holding->status)->toBe('held')
+        ->and((float) $holding->net_amount)->toBe(19000.0);
 });

@@ -11,6 +11,11 @@ class Setting extends Model
     public const GENERAL_DEFAULTS = [
         'whatsappNumber' => '255683568254',
         'mobileMoneyEnabled' => true,
+        // Escrow: hold online payments until the buyer has had a chance to
+        // check the delivery, then release the seller's share.
+        'escrowEnabled' => true,
+        'escrowHoldingDays' => 3,
+        'commissionRate' => 0,
     ];
 
     private const CACHE_KEY = 'settings';

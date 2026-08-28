@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Services\AuditLogger;
+use App\Services\EscrowService;
 use App\Services\MalipoPayService;
 use App\Services\OrderNotifier;
 use Illuminate\Http\JsonResponse;
@@ -27,6 +28,7 @@ class MalipoPayWebhookController extends Controller
         private readonly MalipoPayService $malipoPay,
         private readonly OrderNotifier $notifier,
         private readonly AuditLogger $audit,
+        private readonly EscrowService $escrow,
     ) {}
 
     public function __invoke(Request $request): JsonResponse
@@ -75,6 +77,8 @@ class MalipoPayWebhookController extends Controller
 
             if (! $alreadyPaid) {
                 $this->audit->record('order.payment_confirmed', $order, ['amount' => $amount, 'reference' => $order->payment_reference, 'transactionId' => $transactionId, 'channel' => $channel], "Payment received for order {$order->number}");
+                // Hold the money for each shop on the order until it is delivered.
+                $this->escrow->openForOrder($order->refresh());
                 $this->notifier->paymentConfirmed($order->refresh());
             }
 

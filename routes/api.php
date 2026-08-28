@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BannerController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CatalogController;
+use App\Http\Controllers\Api\EscrowController;
 use App\Http\Controllers\Api\MalipoPayWebhookController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\OrderController;
@@ -53,6 +54,11 @@ Route::prefix('v1')->group(function (): void {
         Route::get('tickets/{ticket}', [TicketController::class, 'show']);
         Route::patch('tickets/{ticket}', [TicketController::class, 'update']);
         Route::post('tickets/{ticket}/messages', [TicketController::class, 'reply'])->middleware('throttle:60,1');
+        // Escrow. Visibility is scoped per role inside the controller.
+        Route::get('escrow', [EscrowController::class, 'index']);
+        Route::get('payouts', [EscrowController::class, 'payouts']);
+        Route::post('escrow/{holding}/confirm', [EscrowController::class, 'confirm']);
+        Route::post('escrow/{holding}/dispute', [EscrowController::class, 'dispute']);
         Route::get('orders', [OrderController::class, 'index']);
         Route::get('orders/{order}', [OrderController::class, 'show']);
         Route::post('checkout', [OrderController::class, 'store'])->middleware('verified.api');
@@ -87,6 +93,10 @@ Route::prefix('v1')->group(function (): void {
             Route::apiResource('media', MediaController::class)->only(['index', 'store', 'destroy']);
             Route::get('shops', [AdminController::class, 'shops']);
             Route::patch('shops/{shop}', [AdminController::class, 'updateShop']);
+            Route::post('escrow/{holding}/resolve', [EscrowController::class, 'resolve']);
+            Route::get('payable-sellers', [EscrowController::class, 'payableSellers']);
+            Route::post('payouts', [EscrowController::class, 'createPayout']);
+            Route::patch('payouts/{payout}', [EscrowController::class, 'updatePayout']);
             Route::get('reviews', [AdminController::class, 'reviews']);
             Route::delete('reviews/{review}', [AdminController::class, 'destroyReview']);
             Route::apiResource('banners', BannerController::class)->except(['index', 'show']);

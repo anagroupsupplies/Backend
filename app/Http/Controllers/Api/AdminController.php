@@ -12,6 +12,7 @@ use App\Models\Review;
 use App\Models\Shop;
 use App\Models\User;
 use App\Services\AuditLogger;
+use App\Services\EscrowService;
 use App\Services\OrderNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,6 +25,7 @@ class AdminController extends Controller
     public function __construct(
         private readonly OrderNotifier $notifier,
         private readonly AuditLogger $audit,
+        private readonly EscrowService $escrow,
     ) {}
 
     public function dashboard(Request $request): JsonResponse
@@ -252,6 +254,14 @@ class AdminController extends Controller
         if ($data['status'] === 'delivered' && $order->status === 'delivered' && $order->isPaidOnDelivery() && ! $order->isPaid()) {
             $order->markPaid((float) $order->total, channel: 'Cash on delivery');
             $order->refresh();
+        }
+
+        // Delivering starts this shop's escrow inspection window. An admin
+        // acting on the whole order starts it for every shop on it.
+        if ($data['status'] === 'delivered') {
+            foreach ($isAdmin ? $order->items()->whereNotNull('seller_id')->distinct()->pluck('seller_id') : [$sellerId] as $id) {
+                $this->escrow->markDelivered($order, (int) $id);
+            }
         }
 
         if ($changed) {

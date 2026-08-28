@@ -24,6 +24,9 @@ class AuditLogger
         'product.created', 'product.updated', 'product.deleted',
         'shop.status_changed', 'review.deleted', 'media.deleted',
         'auth.admin_signed_in',
+        'escrow.opened', 'escrow.pending_release', 'escrow.released',
+        'escrow.disputed', 'escrow.refunded',
+        'payout.created', 'payout.paid', 'payout.cancelled',
     ];
 
     /**
