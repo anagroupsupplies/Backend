@@ -27,6 +27,8 @@ class AuditLogger
         'escrow.opened', 'escrow.pending_release', 'escrow.released',
         'escrow.disputed', 'escrow.refunded',
         'payout.created', 'payout.paid', 'payout.cancelled',
+        'seller_application.submitted', 'seller_application.approved',
+        'seller_application.rejected', 'seller_application.info_requested',
     ];
 
     /**

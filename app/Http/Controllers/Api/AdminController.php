@@ -9,6 +9,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\Review;
+use App\Models\SellerApplication;
 use App\Models\Shop;
 use App\Models\User;
 use App\Services\AuditLogger;
@@ -34,7 +35,7 @@ class AdminController extends Controller
         $cacheKey = $isMaster ? 'dashboard_master' : 'dashboard_admin';
 
         return response()->json(['data' => Cache::remember($cacheKey, 30, function () use ($isMaster) {
-            $data = ['productsCount' => Product::count(), 'categoriesCount' => Category::count(), 'ordersCount' => Order::count(), 'pendingOrdersCount' => Order::where('status', 'pending')->count(), 'deliveredOrdersCount' => Order::where('status', 'delivered')->count(), 'revenue' => (float) Order::paid()->sum('total'), 'pendingRevenue' => (float) Order::whereNot('payment_status', Order::PAY_STATUS_PAID)->whereNot('status', 'cancelled')->sum('total'), 'paidOrdersCount' => Order::paid()->count(), 'awaitingPaymentCount' => Order::where('payment_status', Order::PAY_STATUS_PROCESSING)->count(), 'shopsCount' => Shop::count(), 'activeShopsCount' => Shop::where('is_active', true)->count()];
+            $data = ['productsCount' => Product::count(), 'categoriesCount' => Category::count(), 'ordersCount' => Order::count(), 'pendingOrdersCount' => Order::where('status', 'pending')->count(), 'deliveredOrdersCount' => Order::where('status', 'delivered')->count(), 'revenue' => (float) Order::paid()->sum('total'), 'pendingRevenue' => (float) Order::whereNot('payment_status', Order::PAY_STATUS_PAID)->whereNot('status', 'cancelled')->sum('total'), 'paidOrdersCount' => Order::paid()->count(), 'awaitingPaymentCount' => Order::where('payment_status', Order::PAY_STATUS_PROCESSING)->count(), 'pendingSellerApplicationsCount' => SellerApplication::where('status', 'pending')->count(), 'shopsCount' => Shop::count(), 'activeShopsCount' => Shop::where('is_active', true)->count()];
             if ($isMaster) {
                 $data['usersCount'] = User::count();
                 $data['adminsCount'] = User::whereIn('role', ['admin', 'master'])->count();

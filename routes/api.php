@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\MalipoPayWebhookController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ReviewController;
+use App\Http\Controllers\Api\SellerApplicationController;
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\ShopController;
 use App\Http\Controllers\Api\TicketController;
@@ -59,6 +60,10 @@ Route::prefix('v1')->group(function (): void {
         Route::get('payouts', [EscrowController::class, 'payouts']);
         Route::post('escrow/{holding}/confirm', [EscrowController::class, 'confirm']);
         Route::post('escrow/{holding}/dispute', [EscrowController::class, 'dispute']);
+        // Becoming a seller: any signed-in customer may apply.
+        Route::get('seller-application', [SellerApplicationController::class, 'mine']);
+        Route::post('seller-application', [SellerApplicationController::class, 'store'])->middleware('throttle:10,1');
+        Route::post('seller-application/documents', [SellerApplicationController::class, 'upload'])->middleware('throttle:30,1');
         Route::get('orders', [OrderController::class, 'index']);
         Route::get('orders/{order}', [OrderController::class, 'show']);
         Route::post('checkout', [OrderController::class, 'store'])->middleware('verified.api');
@@ -97,6 +102,12 @@ Route::prefix('v1')->group(function (): void {
             Route::get('payable-sellers', [EscrowController::class, 'payableSellers']);
             Route::post('payouts', [EscrowController::class, 'createPayout']);
             Route::patch('payouts/{payout}', [EscrowController::class, 'updatePayout']);
+            Route::get('seller-applications', [SellerApplicationController::class, 'index']);
+            Route::get('seller-applications/{application}', [SellerApplicationController::class, 'show']);
+            Route::get('seller-applications/{application}/document/{kind}', [SellerApplicationController::class, 'document']);
+            Route::post('seller-applications/{application}/approve', [SellerApplicationController::class, 'approve']);
+            Route::post('seller-applications/{application}/reject', [SellerApplicationController::class, 'reject']);
+            Route::post('seller-applications/{application}/request-information', [SellerApplicationController::class, 'requestInformation']);
             Route::get('reviews', [AdminController::class, 'reviews']);
             Route::delete('reviews/{review}', [AdminController::class, 'destroyReview']);
             Route::apiResource('banners', BannerController::class)->except(['index', 'show']);

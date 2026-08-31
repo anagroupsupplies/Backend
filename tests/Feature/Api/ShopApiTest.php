@@ -8,6 +8,7 @@ use App\Models\Category;
 use App\Models\EscrowHolding;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\SellerApplication;
 use App\Models\Setting;
 use App\Models\Shop;
 use App\Models\Ticket;
@@ -17,15 +18,18 @@ use App\Notifications\OrderPaymentConfirmedNotification;
 use App\Notifications\OrderPlacedNotification;
 use App\Notifications\OrderStatusUpdatedNotification;
 use App\Notifications\ResetPasswordNotification;
+use App\Notifications\SellerApplicationStatusNotification;
 use App\Notifications\TicketOpenedNotification;
 use App\Notifications\TicketRepliedNotification;
 use App\Services\EscrowService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
 
@@ -1501,4 +1505,233 @@ test('a mobile money webhook opens escrow for the order automatically', function
     $holding = EscrowHolding::firstOrFail();
     expect($holding->status)->toBe('held')
         ->and((float) $holding->net_amount)->toBe(19000.0);
+});
+
+/** @return array<string, mixed> */
+function applicationPayload(array $overrides = []): array
+{
+    return [...[
+        'fullName' => 'Asha Mwinyi',
+        'businessName' => 'Asha Fashions',
+        'productCategory' => 'Clothing and shoes',
+        'phone' => '0712345678',
+        'region' => 'Dar es Salaam',
+        'city' => 'Kinondoni',
+        'streetAddress' => 'Mikocheni B, plot 42',
+        'businessDescription' => 'We sell womens clothing imported from Dubai.',
+        'tinNumber' => '123-456-789',
+        'payoutMethod' => 'mobile_money',
+        'payoutAccountName' => 'Asha Mwinyi',
+        'payoutNumber' => '0712345678',
+        'idDocumentType' => 'nida',
+        'idNumber' => '19900101-12345-00001-23',
+        'idDocumentPath' => 'seller-applications/1/id.jpg',
+        'acceptTerms' => true,
+    ], ...$overrides];
+}
+
+test('a customer can apply to become a seller and sees pending approval', function () {
+    Notification::fake();
+    User::factory()->create(['role' => 'master']);
+    $buyer = User::factory()->create();
+
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())
+        ->assertCreated()
+        ->assertJsonPath('data.status', 'pending')
+        ->assertJsonPath('data.statusLabel', 'Pending Approval')
+        ->assertJsonPath('data.businessName', 'Asha Fashions');
+
+    $application = SellerApplication::firstOrFail();
+    expect($application->reference)->toStartWith('APP-')
+        ->and($application->user_id)->toBe($buyer->id)
+        ->and($application->terms_accepted_at)->not->toBeNull()
+        // The applicant is still a customer until an admin approves.
+        ->and($buyer->refresh()->role)->toBe('user');
+
+    $this->actingAs($buyer)->getJson('/api/v1/seller-application')->assertOk()->assertJsonPath('data.status', 'pending');
+});
+
+test('the application requires the terms to be accepted and the identity document', function () {
+    $buyer = User::factory()->create();
+
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload(['acceptTerms' => false]))
+        ->assertStatus(422)->assertJsonValidationErrors('acceptTerms');
+
+    $payload = applicationPayload();
+    unset($payload['idDocumentPath'], $payload['idNumber']);
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', $payload)
+        ->assertStatus(422)->assertJsonValidationErrors(['idDocumentPath', 'idNumber']);
+
+    expect(SellerApplication::count())->toBe(0);
+});
+
+test('a customer cannot submit a second application while one is pending', function () {
+    Notification::fake();
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertCreated();
+
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertStatus(422);
+
+    expect(SellerApplication::count())->toBe(1);
+});
+
+test('an existing seller cannot apply again', function () {
+    $seller = User::factory()->create(['role' => 'seller']);
+
+    $this->actingAs($seller)->postJson('/api/v1/seller-application', applicationPayload())->assertStatus(422);
+});
+
+test('approving an application turns the account into a seller and opens their shop', function () {
+    Notification::fake();
+    $admin = User::factory()->create(['role' => 'admin']);
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertCreated();
+    $application = SellerApplication::firstOrFail();
+
+    $this->actingAs($admin)->postJson("/api/v1/admin/seller-applications/{$application->id}/approve")
+        ->assertOk()
+        ->assertJsonPath('data.status', 'approved');
+
+    expect($buyer->refresh()->role)->toBe('seller')
+        ->and(Shop::where('seller_id', $buyer->id)->value('name'))->toBe('Asha Fashions')
+        ->and($application->refresh()->reviewed_by)->toBe($admin->id);
+
+    // The newly promoted seller can now reach the seller dashboard.
+    $this->actingAs($buyer->refresh())->getJson('/api/v1/seller/dashboard')->assertOk();
+
+    Notification::assertSentTo($buyer, SellerApplicationStatusNotification::class);
+});
+
+test('rejecting an application records the reason and leaves the account a customer', function () {
+    Notification::fake();
+    $admin = User::factory()->create(['role' => 'admin']);
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertCreated();
+    $application = SellerApplication::firstOrFail();
+
+    $this->actingAs($admin)->postJson("/api/v1/admin/seller-applications/{$application->id}/reject", ['reason' => 'The ID photo is unreadable.'])
+        ->assertOk()
+        ->assertJsonPath('data.status', 'rejected');
+
+    expect($buyer->refresh()->role)->toBe('user')
+        ->and($application->refresh()->rejection_reason)->toBe('The ID photo is unreadable.');
+
+    // Rejection is not a dead end: the applicant may try again.
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertCreated();
+});
+
+test('requesting more information lets the applicant edit and resubmit the same application', function () {
+    Notification::fake();
+    $admin = User::factory()->create(['role' => 'admin']);
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertCreated();
+    $application = SellerApplication::firstOrFail();
+
+    $this->actingAs($admin)->postJson("/api/v1/admin/seller-applications/{$application->id}/request-information", ['notes' => 'Please send a clearer photo of your NIDA.'])
+        ->assertOk()
+        ->assertJsonPath('data.status', 'more_info_requested');
+
+    $this->actingAs($buyer)->getJson('/api/v1/seller-application')
+        ->assertOk()
+        ->assertJsonPath('data.canEdit', true)
+        ->assertJsonPath('data.reviewNotes', 'Please send a clearer photo of your NIDA.');
+
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload(['businessName' => 'Asha Fashions Ltd']))->assertCreated();
+
+    // Updated in place rather than duplicated.
+    expect(SellerApplication::count())->toBe(1)
+        ->and($application->refresh()->status)->toBe('pending')
+        ->and($application->business_name)->toBe('Asha Fashions Ltd')
+        ->and($application->review_notes)->toBeNull();
+});
+
+test('only administrators can review applications', function () {
+    Notification::fake();
+    $buyer = User::factory()->create();
+    $seller = User::factory()->create(['role' => 'seller']);
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertCreated();
+    $application = SellerApplication::firstOrFail();
+
+    foreach ([$buyer, $seller] as $actor) {
+        $this->actingAs($actor)->getJson('/api/v1/admin/seller-applications')->assertStatus(403);
+        $this->actingAs($actor)->postJson("/api/v1/admin/seller-applications/{$application->id}/approve")->assertStatus(403);
+    }
+
+    expect($buyer->refresh()->role)->toBe('user');
+});
+
+test('identity documents are stored privately and only streamed to administrators', function () {
+    Storage::fake('local');
+    Storage::fake('public');
+    $admin = User::factory()->create(['role' => 'admin']);
+    $buyer = User::factory()->create();
+
+    $upload = $this->actingAs($buyer)->postJson('/api/v1/seller-application/documents', [
+        'kind' => 'id_document',
+        'file' => UploadedFile::fake()->create('nida.jpg', 120, 'image/jpeg'),
+    ])->assertCreated()->json('data');
+
+    // A private document is never handed back as a public URL.
+    expect($upload['url'])->toBeNull()
+        ->and($upload['path'])->toStartWith('seller-applications/');
+    Storage::disk('local')->assertExists($upload['path']);
+    Storage::disk('public')->assertMissing($upload['path']);
+
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload(['idDocumentPath' => $upload['path']]))->assertCreated();
+    $application = SellerApplication::firstOrFail();
+
+    $this->actingAs($admin)->get("/api/v1/admin/seller-applications/{$application->id}/document/id_document")->assertOk();
+    $this->actingAs($buyer)->get("/api/v1/admin/seller-applications/{$application->id}/document/id_document")->assertStatus(403);
+});
+
+test('a shop logo is uploaded to the public disk for branding', function () {
+    Storage::fake('public');
+    $buyer = User::factory()->create();
+
+    $upload = $this->actingAs($buyer)->postJson('/api/v1/seller-application/documents', [
+        'kind' => 'logo',
+        'file' => UploadedFile::fake()->create('logo.png', 120, 'image/png'),
+    ])->assertCreated()->json('data');
+
+    expect($upload['url'])->not->toBeNull();
+    Storage::disk('public')->assertExists($upload['path']);
+});
+
+test('the admin queue reports how many applications are pending', function () {
+    Notification::fake();
+    $admin = User::factory()->create(['role' => 'admin']);
+    foreach (range(1, 3) as $i) {
+        $buyer = User::factory()->create();
+        $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload(['businessName' => "Shop {$i}"]))->assertCreated();
+    }
+
+    $this->actingAs($admin)->getJson('/api/v1/admin/seller-applications?status=pending')
+        ->assertOk()
+        ->assertJsonPath('data.counts.pending', 3)
+        ->assertJsonPath('data.meta.total', 3);
+
+    $this->actingAs($admin)->getJson('/api/v1/admin/dashboard')
+        ->assertOk()
+        ->assertJsonPath('data.pendingSellerApplicationsCount', 3);
+});
+
+test('the seller application emails render without blade errors', function () {
+    $admin = User::factory()->create(['role' => 'master']);
+    $buyer = User::factory()->create(['name' => 'Asha Mwinyi']);
+    $application = SellerApplication::create([
+        'reference' => 'APP-RENDER-1', 'user_id' => $buyer->id, 'full_name' => 'Asha Mwinyi',
+        'business_name' => 'Asha Fashions', 'product_category' => 'Clothing', 'phone' => '0712345678',
+        'region' => 'Dar es Salaam', 'city' => 'Kinondoni', 'street_address' => 'Mikocheni',
+        'business_description' => 'Clothes', 'payout_account_name' => 'Asha', 'payout_number' => '0712345678',
+        'id_number' => 'X', 'id_document_path' => 'x.jpg', 'review_notes' => 'Send a clearer NIDA photo.',
+        'rejection_reason' => 'Unreadable document.',
+    ]);
+
+    foreach (['submitted', 'approved', 'rejected', 'more_info'] as $event) {
+        $rendered = renderMail((new SellerApplicationStatusNotification($application, $event))->toMail($buyer));
+        expect($rendered)->toContain('APP-RENDER-1')->toContain('Asha Fashions');
+    }
+
+    $alert = renderMail((new SellerApplicationStatusNotification($application, 'admin_alert'))->toMail($admin));
+    expect($alert)->toContain('Asha Fashions')->toContain($buyer->email);
 });
