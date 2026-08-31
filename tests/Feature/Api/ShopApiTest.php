@@ -1740,17 +1740,17 @@ test('an administrator can set a category icon and shoppers receive it', functio
     $admin = User::factory()->create(['role' => 'admin']);
     $this->actingAs($admin);
 
-    $created = $this->postJson('/api/v1/admin/categories', ['name' => 'Electronics', 'description' => 'Phones and gadgets', 'icon' => '📱'])
+    $created = $this->postJson('/api/v1/admin/categories', ['name' => 'Electronics', 'description' => 'Phones and gadgets', 'icon' => 'Phone'])
         ->assertCreated()
-        ->assertJsonPath('data.icon', '📱')
+        ->assertJsonPath('data.icon', 'Phone')
         ->json('data');
 
-    // A multi-codepoint emoji must survive the 32 character column.
-    $this->patchJson("/api/v1/admin/categories/{$created['id']}", ['icon' => '👩‍🔧'])
+    // The stored value is the icon's export name, not a glyph.
+    $this->patchJson("/api/v1/admin/categories/{$created['id']}", ['icon' => 'WrenchAdjustable'])
         ->assertOk()
-        ->assertJsonPath('data.icon', '👩‍🔧');
+        ->assertJsonPath('data.icon', 'WrenchAdjustable');
 
-    $this->getJson('/api/v1/categories')->assertOk()->assertJsonPath('data.0.icon', '👩‍🔧');
+    $this->getJson('/api/v1/categories')->assertOk()->assertJsonPath('data.0.icon', 'WrenchAdjustable');
 
     // Clearing the icon is allowed; the storefront falls back to an image.
     $this->patchJson("/api/v1/admin/categories/{$created['id']}", ['icon' => null])
@@ -1763,8 +1763,8 @@ test('a category can be created with a parent without breaking the insert', func
     $this->actingAs($admin);
     $parent = Category::create(['name' => 'Fashion', 'slug' => 'fashion']);
 
-    $this->postJson('/api/v1/admin/categories', ['name' => 'Shoes', 'parentId' => $parent->id, 'icon' => '👟'])
+    $this->postJson('/api/v1/admin/categories', ['name' => 'Shoes', 'parentId' => $parent->id, 'icon' => 'Bag'])
         ->assertCreated()
         ->assertJsonPath('data.parentId', (string) $parent->id)
-        ->assertJsonPath('data.icon', '👟');
+        ->assertJsonPath('data.icon', 'Bag');
 });
