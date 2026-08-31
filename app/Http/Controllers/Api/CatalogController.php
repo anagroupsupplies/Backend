@@ -114,8 +114,12 @@ class CatalogController extends Controller
 
     public function storeCategory(Request $request): JsonResponse
     {
-        $data = $request->validate(['name' => ['required', 'string', 'max:255', 'unique:categories'], 'description' => ['nullable', 'string'], 'image' => ['nullable', 'string'], 'parentId' => ['nullable', 'exists:categories,id']]);
-        $category = Category::create([...$data, 'parent_id' => $data['parentId'] ?? null, 'slug' => Str::slug($data['name'])]);
+        $data = $request->validate(['name' => ['required', 'string', 'max:255', 'unique:categories'], 'description' => ['nullable', 'string'], 'image' => ['nullable', 'string'], 'icon' => ['nullable', 'string', 'max:32'], 'parentId' => ['nullable', 'exists:categories,id']]);
+        // parentId is the API name; the column is parent_id, so drop the alias
+        // before it reaches the insert.
+        $parentId = $data['parentId'] ?? null;
+        unset($data['parentId']);
+        $category = Category::create([...$data, 'parent_id' => $parentId, 'slug' => Str::slug($data['name'])]);
         Cache::forget('categories');
 
         return response()->json(['data' => $this->categoryData($category)], 201);
@@ -123,7 +127,7 @@ class CatalogController extends Controller
 
     public function updateCategory(Request $request, Category $category): JsonResponse
     {
-        $data = $request->validate(['name' => ['sometimes', 'string', 'max:255', 'unique:categories,name,'.$category->id], 'description' => ['nullable', 'string'], 'image' => ['nullable', 'string'], 'isActive' => ['nullable', 'boolean'], 'parentId' => ['nullable', 'exists:categories,id']]);
+        $data = $request->validate(['name' => ['sometimes', 'string', 'max:255', 'unique:categories,name,'.$category->id], 'description' => ['nullable', 'string'], 'image' => ['nullable', 'string'], 'icon' => ['nullable', 'string', 'max:32'], 'isActive' => ['nullable', 'boolean'], 'parentId' => ['nullable', 'exists:categories,id']]);
         if (isset($data['name'])) {
             $data['slug'] = Str::slug($data['name']);
         } if (array_key_exists('isActive', $data)) {
@@ -187,7 +191,7 @@ class CatalogController extends Controller
     /** @return array<string, mixed> */
     private function categoryData(Category $category): array
     {
-        return ['id' => (string) $category->id, 'parentId' => $category->parent_id ? (string) $category->parent_id : null, 'name' => $category->name, 'slug' => $category->slug, 'description' => $category->description, 'image' => $category->image, ...($category->metadata ?? [])];
+        return ['id' => (string) $category->id, 'parentId' => $category->parent_id ? (string) $category->parent_id : null, 'name' => $category->name, 'slug' => $category->slug, 'description' => $category->description, 'image' => $category->image, 'icon' => $category->icon, ...($category->metadata ?? [])];
     }
 
     /** @return array<string, mixed> */

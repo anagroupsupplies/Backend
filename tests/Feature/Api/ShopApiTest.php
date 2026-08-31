@@ -1735,3 +1735,36 @@ test('the seller application emails render without blade errors', function () {
     $alert = renderMail((new SellerApplicationStatusNotification($application, 'admin_alert'))->toMail($admin));
     expect($alert)->toContain('Asha Fashions')->toContain($buyer->email);
 });
+
+test('an administrator can set a category icon and shoppers receive it', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $this->actingAs($admin);
+
+    $created = $this->postJson('/api/v1/admin/categories', ['name' => 'Electronics', 'description' => 'Phones and gadgets', 'icon' => '📱'])
+        ->assertCreated()
+        ->assertJsonPath('data.icon', '📱')
+        ->json('data');
+
+    // A multi-codepoint emoji must survive the 32 character column.
+    $this->patchJson("/api/v1/admin/categories/{$created['id']}", ['icon' => '👩‍🔧'])
+        ->assertOk()
+        ->assertJsonPath('data.icon', '👩‍🔧');
+
+    $this->getJson('/api/v1/categories')->assertOk()->assertJsonPath('data.0.icon', '👩‍🔧');
+
+    // Clearing the icon is allowed; the storefront falls back to an image.
+    $this->patchJson("/api/v1/admin/categories/{$created['id']}", ['icon' => null])
+        ->assertOk()
+        ->assertJsonPath('data.icon', null);
+});
+
+test('a category can be created with a parent without breaking the insert', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $this->actingAs($admin);
+    $parent = Category::create(['name' => 'Fashion', 'slug' => 'fashion']);
+
+    $this->postJson('/api/v1/admin/categories', ['name' => 'Shoes', 'parentId' => $parent->id, 'icon' => '👟'])
+        ->assertCreated()
+        ->assertJsonPath('data.parentId', (string) $parent->id)
+        ->assertJsonPath('data.icon', '👟');
+});
