@@ -1768,3 +1768,61 @@ test('a category can be created with a parent without breaking the insert', func
         ->assertJsonPath('data.parentId', (string) $parent->id)
         ->assertJsonPath('data.icon', 'Bag');
 });
+
+test('a product is reachable by its slug and by its id', function () {
+    $product = Product::create(['name' => 'Blue Running Shoe', 'slug' => 'blue-running-shoe-a3f9x1', 'price' => 45000, 'stock' => 3]);
+
+    $this->getJson('/api/v1/products/blue-running-shoe-a3f9x1')
+        ->assertOk()
+        ->assertJsonPath('data.id', (string) $product->id)
+        ->assertJsonPath('data.slug', 'blue-running-shoe-a3f9x1');
+
+    // Existing links, bookmarks and cached bundles keep working.
+    $this->getJson("/api/v1/products/{$product->id}")
+        ->assertOk()
+        ->assertJsonPath('data.slug', 'blue-running-shoe-a3f9x1');
+
+    $this->getJson('/api/v1/products/no-such-product')->assertNotFound();
+});
+
+test('renaming a product keeps its slug so shared links do not break', function () {
+    $seller = User::factory()->create(['role' => 'seller']);
+    $product = Product::create(['name' => 'Blue Shoe', 'slug' => 'blue-shoe-zz9911', 'price' => 45000, 'stock' => 3, 'seller_id' => $seller->id]);
+
+    $this->actingAs($seller)->patchJson("/api/v1/seller/products/{$product->id}", ['name' => 'Navy Shoe'])
+        ->assertOk()
+        ->assertJsonPath('data.name', 'Navy Shoe')
+        ->assertJsonPath('data.slug', 'blue-shoe-zz9911');
+
+    $this->getJson('/api/v1/products/blue-shoe-zz9911')->assertOk()->assertJsonPath('data.name', 'Navy Shoe');
+});
+
+test('a seller can manage their product by slug and still cannot touch another shop', function () {
+    $sellerA = User::factory()->create(['role' => 'seller']);
+    $sellerB = User::factory()->create(['role' => 'seller']);
+    $product = Product::create(['name' => 'A Shoe', 'slug' => 'a-shoe-qq2244', 'price' => 1000, 'stock' => 2, 'seller_id' => $sellerA->id]);
+
+    $this->actingAs($sellerA)->patchJson('/api/v1/seller/products/a-shoe-qq2244', ['price' => 1500])->assertOk();
+    // Ownership, not the identifier format, is what protects the resource.
+    $this->actingAs($sellerB)->patchJson('/api/v1/seller/products/a-shoe-qq2244', ['price' => 1])->assertStatus(403);
+
+    expect((float) $product->refresh()->price)->toBe(1500.0);
+});
+
+test('product search matches on name and description', function () {
+    Product::create(['name' => 'Samsung Galaxy A15', 'slug' => 'samsung-a15-aa1122', 'price' => 300000, 'stock' => 2, 'description' => 'Android smartphone']);
+    Product::create(['name' => 'Leather Sandals', 'slug' => 'leather-sandals-bb3344', 'price' => 20000, 'stock' => 5, 'description' => 'Handmade in Arusha']);
+
+    $this->getJson('/api/v1/products?search=samsung')->assertOk()->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.name', 'Samsung Galaxy A15');
+    $this->getJson('/api/v1/products?search=arusha')->assertOk()->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.name', 'Leather Sandals');
+    $this->getJson('/api/v1/products?search=zzzznothing')->assertOk()->assertJsonCount(0, 'data');
+});
+
+test('a search full of operator characters does not break the query', function () {
+    Product::create(['name' => 'Samsung Galaxy', 'slug' => 'samsung-galaxy-cc5566', 'price' => 300000, 'stock' => 2]);
+
+    $this->getJson('/api/v1/products?search='.urlencode('+-><()~*"@'))->assertOk();
+    $this->getJson('/api/v1/products?search='.urlencode('samsung*'))->assertOk();
+});

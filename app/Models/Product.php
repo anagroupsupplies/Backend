@@ -13,6 +13,24 @@ class Product extends Model
         return ['price' => 'decimal:2', 'images' => 'array', 'video' => 'array', 'sizes' => 'array', 'data' => 'array', 'featured' => 'boolean', 'is_active' => 'boolean'];
     }
 
+    /**
+     * Resolve a product from either its slug or its numeric id.
+     *
+     * New links use the slug; every id already in the wild — old bookmarks,
+     * shared links, the current frontend bundle — must keep working, so the
+     * numeric form stays valid. Slugs always carry a random alphabetic suffix,
+     * so the two forms can never collide.
+     */
+    public function resolveRouteBinding($value, $field = null)
+    {
+        if ($field) {
+            return parent::resolveRouteBinding($value, $field);
+        }
+
+        return $this->where('slug', $value)->first()
+            ?? (ctype_digit((string) $value) ? $this->whereKey($value)->first() : null);
+    }
+
     public function category()
     {
         return $this->belongsTo(Category::class);

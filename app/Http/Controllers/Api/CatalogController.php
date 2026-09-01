@@ -9,9 +9,11 @@ use App\Models\ProductGroup;
 use App\Models\Shop;
 use App\Models\User;
 use App\Services\AuditLogger;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class CatalogController extends Controller
@@ -22,7 +24,7 @@ class CatalogController extends Controller
         $query->when($request->string('category')->isNotEmpty(), fn ($q) => $q->whereHas('category', fn ($c) => $c->where('slug', $request->string('category'))->orWhere('id', $request->input('category'))));
         $query->when($request->string('seller')->isNotEmpty(), fn ($q) => $q->where('seller_id', $request->input('seller')));
         $query->when($request->string('shop')->isNotEmpty(), fn ($q) => $q->whereHas('shop', fn ($s) => $s->where('slug', $request->input('shop'))->orWhere('id', $request->input('shop'))));
-        $query->when($request->string('search')->isNotEmpty(), fn ($q) => $q->where(fn ($w) => $w->where('name', 'like', '%'.$request->input('search').'%')->orWhere('description', 'like', '%'.$request->input('search').'%')));
+        $query->when($request->string('search')->isNotEmpty(), fn ($q) => $this->applySearch($q, (string) $request->input('search')));
         $query->when($request->boolean('featured'), fn ($q) => $q->where('featured', true));
 
         $cacheKey = 'products_list:'.md5(json_encode($request->only(['category', 'seller', 'shop', 'search', 'featured'])));
@@ -175,17 +177,50 @@ class CatalogController extends Controller
         if ($extra !== []) {
             $mapped['data'] = [...($updating ? ($request->route('product')?->data ?? []) : []), ...$extra];
         }
-        if (isset($mapped['name'])) {
+        // The slug is a permalink: it is minted once, on creation. Renaming a
+        // product must not silently change its URL and break shared links,
+        // search rankings and the order history that points at it.
+        if (! $updating && isset($mapped['name'])) {
             $mapped['slug'] = Str::slug($mapped['name']).'-'.Str::lower(Str::random(6));
         }
 
         return $mapped;
     }
 
+    /**
+     * Match products against a shopper's search term.
+     *
+     * Uses the FULLTEXT index on MySQL so the query is index-backed rather than
+     * a full scan. A trailing `*` makes it a prefix match, so "sam" still finds
+     * "Samsung". Anything the index cannot serve — a term shorter than MySQL's
+     * minimum word length, or a non-MySQL connection — falls back to LIKE so a
+     * search never silently returns nothing.
+     */
+    private function applySearch(Builder $query, string $term): Builder
+    {
+        $term = trim($term);
+        $useFullText = DB::connection()->getDriverName() === 'mysql' && strlen($term) >= 3;
+
+        if ($useFullText) {
+            // Strip the boolean-mode operators so a stray + or - cannot break
+            // the query or be used to probe the index.
+            $sanitised = preg_replace('/[+\-><()~*"@]+/', ' ', $term) ?? '';
+            $words = array_filter(explode(' ', $sanitised));
+
+            if ($words !== []) {
+                $against = implode(' ', array_map(fn (string $word) => $word.'*', $words));
+
+                return $query->whereFullText(['name', 'description'], $against, ['mode' => 'boolean']);
+            }
+        }
+
+        return $query->where(fn ($w) => $w->where('name', 'like', '%'.$term.'%')->orWhere('description', 'like', '%'.$term.'%'));
+    }
+
     /** @return array<string, mixed> */
     private function productData(Product $product): array
     {
-        return ['id' => (string) $product->id, 'sellerId' => $product->seller_id ? (string) $product->seller_id : null, 'shopId' => $product->shop_id ? (string) $product->shop_id : null, 'shopName' => $product->shop?->name, 'shopSlug' => $product->shop?->slug, 'name' => $product->name, 'description' => $product->description, 'price' => (float) $product->price, 'stock' => $product->stock, 'image' => $product->image, 'images' => $product->images, 'video' => $product->video, 'sizes' => $product->sizes, 'sizingType' => $product->sizing_type, 'featured' => $product->featured, 'isActive' => $product->is_active, 'category' => $product->category?->name, 'categoryId' => $product->category_id ? (string) $product->category_id : null, 'groupId' => $product->product_group_id ? (string) $product->product_group_id : null, 'createdAt' => $product->created_at, ...($product->data ?? [])];
+        return ['id' => (string) $product->id, 'slug' => $product->slug, 'sellerId' => $product->seller_id ? (string) $product->seller_id : null, 'shopId' => $product->shop_id ? (string) $product->shop_id : null, 'shopName' => $product->shop?->name, 'shopSlug' => $product->shop?->slug, 'name' => $product->name, 'description' => $product->description, 'price' => (float) $product->price, 'stock' => $product->stock, 'image' => $product->image, 'images' => $product->images, 'video' => $product->video, 'sizes' => $product->sizes, 'sizingType' => $product->sizing_type, 'featured' => $product->featured, 'isActive' => $product->is_active, 'category' => $product->category?->name, 'categoryId' => $product->category_id ? (string) $product->category_id : null, 'groupId' => $product->product_group_id ? (string) $product->product_group_id : null, 'createdAt' => $product->created_at, ...($product->data ?? [])];
     }
 
     /** @return array<string, mixed> */
