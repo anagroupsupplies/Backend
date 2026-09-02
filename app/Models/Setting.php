@@ -16,6 +16,9 @@ class Setting extends Model
         'escrowEnabled' => true,
         'escrowHoldingDays' => 3,
         'commissionRate' => 0,
+        // SMS is off until an administrator turns it on: every message is billed.
+        'smsEnabled' => false,
+        'smsSenderName' => 'AUTOFAYA',
     ];
 
     private const CACHE_KEY = 'settings';

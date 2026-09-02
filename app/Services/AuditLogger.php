@@ -20,6 +20,7 @@ class AuditLogger
     public const ACTIONS = [
         'user.role_changed', 'user.status_changed', 'user.deleted',
         'settings.updated', 'settings.mobile_money_toggled',
+        'settings.sms_updated', 'settings.sms_tested',
         'order.status_changed', 'order.payment_confirmed', 'order.payment_failed',
         'product.created', 'product.updated', 'product.deleted',
         'shop.status_changed', 'review.deleted', 'media.deleted',

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
 use App\Services\AuditLogger;
+use App\Services\AutoFayaSmsService;
 use App\Services\MalipoPayService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,6 +14,7 @@ class SettingsController extends Controller
 {
     public function __construct(
         private readonly MalipoPayService $malipoPay,
+        private readonly AutoFayaSmsService $sms,
         private readonly AuditLogger $audit,
     ) {}
 
@@ -32,6 +34,9 @@ class SettingsController extends Controller
             'escrowEnabled' => ['sometimes', 'boolean'],
             'escrowHoldingDays' => ['sometimes', 'integer', 'min:0', 'max:30'],
             'commissionRate' => ['sometimes', 'numeric', 'min:0', 'max:50'],
+            'smsEnabled' => ['sometimes', 'boolean'],
+            // Networks reject long or punctuated sender IDs.
+            'smsSenderName' => ['sometimes', 'string', 'max:11', 'regex:/^[A-Za-z0-9 ]+$/'],
         ]);
         $before = Setting::general();
         Setting::putGeneral($data);
@@ -62,6 +67,55 @@ class SettingsController extends Controller
     }
 
     /**
+     * Turn outgoing SMS on or off without resubmitting every other setting.
+     */
+    public function updateSms(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'enabled' => ['sometimes', 'boolean'],
+            'senderName' => ['sometimes', 'string', 'max:11', 'regex:/^[A-Za-z0-9 ]+$/'],
+        ]);
+
+        $before = Setting::general();
+        Setting::putGeneral(array_filter([
+            'smsEnabled' => $data['enabled'] ?? null,
+            'smsSenderName' => $data['senderName'] ?? null,
+        ], fn ($value) => $value !== null));
+
+        if ($changes = $this->audit->diff(
+            ['smsEnabled' => $before['smsEnabled'] ?? false, 'smsSenderName' => $before['smsSenderName'] ?? null],
+            ['smsEnabled' => Setting::general()['smsEnabled'], 'smsSenderName' => Setting::general()['smsSenderName']],
+        )) {
+            $this->audit->record('settings.sms_updated', null, $changes, 'Updated the SMS notification settings');
+        }
+
+        return response()->json(['data' => $this->data()]);
+    }
+
+    /**
+     * Send one real message so an administrator can prove the integration
+     * works before switching it on for customers.
+     */
+    public function testSms(Request $request): JsonResponse
+    {
+        $data = $request->validate(['phone' => ['required', 'string', 'max:30']]);
+        abort_unless($this->sms->isConfigured(), 422, 'The AutoFaya API key is not configured on the server.');
+        abort_if($this->sms->normalisePhone($data['phone']) === null, 422, 'Enter a valid Tanzanian mobile number, for example 0712345678.');
+
+        try {
+            // Bypasses the on/off switch on purpose: the point is to verify the
+            // integration before enabling it.
+            $this->sms->sendDirect($data['phone'], 'Test message from '.$this->sms->senderName().'. Your SMS notifications are working.');
+        } catch (\RuntimeException $exception) {
+            abort(422, $exception->getMessage());
+        }
+
+        $this->audit->record('settings.sms_tested', null, ['phone' => $data['phone']], 'Sent a test SMS');
+
+        return response()->json(['message' => 'Test message sent.']);
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function data(): array
@@ -76,6 +130,10 @@ class SettingsController extends Controller
             // not enough to promise the storefront that payments will work.
             'mobileMoneyConfigured' => $this->malipoPay->isConfigured(),
             'mobileMoneyAvailable' => $enabled && $this->malipoPay->isConfigured(),
+            'smsEnabled' => $this->sms->isEnabled(),
+            'smsConfigured' => $this->sms->isConfigured(),
+            'smsAvailable' => $this->sms->isAvailable(),
+            'smsSenderName' => $this->sms->senderName(),
         ];
     }
 }

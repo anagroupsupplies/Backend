@@ -8,6 +8,12 @@ return [
         'master_admin_emails' => array_filter(array_map('trim', explode(',', env('MASTER_ADMIN_EMAILS', '')))),
     ],
 
+    'autofaya' => [
+        'base_url' => env('AUTOFAYA_BASE_URL', 'https://api.autofaya.com'),
+        'api_key' => env('AUTOFAYA_API_KEY'),
+        'timeout' => (int) env('AUTOFAYA_TIMEOUT', 15),
+    ],
+
     'malipopay' => [
         'base_url' => env('MALIPOPAY_BASE_URL', 'https://core-prod.malipopay.co.tz'),
         'api_token' => env('MALIPOPAY_API_TOKEN'),

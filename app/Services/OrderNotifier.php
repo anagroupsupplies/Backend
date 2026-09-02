@@ -18,6 +18,8 @@ use Throwable;
  */
 class OrderNotifier
 {
+    public function __construct(private readonly SmsNotifier $sms) {}
+
     public function orderPlaced(Order $order): void
     {
         $order->loadMissing('items', 'user');
@@ -29,6 +31,8 @@ class OrderNotifier
             );
         }
 
+        $this->sms->orderPlaced($order);
+
         foreach ($order->items->whereNotNull('seller_id')->groupBy('seller_id') as $sellerId => $items) {
             $seller = User::find($sellerId);
             if (! $seller || ! $seller->email) {
@@ -38,6 +42,7 @@ class OrderNotifier
                 fn () => $seller->notify(new NewOrderForSellerNotification($order, $items)),
                 "new order email to seller {$sellerId} for {$order->number}",
             );
+            $this->sms->newOrderForSeller($order, $seller, (float) $items->sum(fn ($item) => (float) $item->unit_price * $item->quantity));
         }
     }
 
@@ -54,6 +59,8 @@ class OrderNotifier
                 "status update email ({$status}) for {$order->number}",
             );
         }
+
+        $this->sms->statusUpdated($order, $status, $shopName);
     }
 
     public function paymentConfirmed(Order $order): void
@@ -66,6 +73,8 @@ class OrderNotifier
                 "payment confirmation email for {$order->number}",
             );
         }
+
+        $this->sms->paymentConfirmed($order);
     }
 
     private function send(callable $callback, string $description): void

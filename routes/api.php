@@ -119,6 +119,8 @@ Route::prefix('v1')->group(function (): void {
                 Route::delete('users/{user}', [AdminController::class, 'destroyUser']);
                 Route::put('settings', [SettingsController::class, 'update']);
                 Route::patch('settings/mobile-money', [SettingsController::class, 'updateMobileMoney']);
+                Route::patch('settings/sms', [SettingsController::class, 'updateSms']);
+                Route::post('settings/sms/test', [SettingsController::class, 'testSms'])->middleware('throttle:10,1');
             });
         });
     });

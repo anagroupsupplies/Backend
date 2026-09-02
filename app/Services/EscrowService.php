@@ -22,7 +22,7 @@ use RuntimeException;
  */
 class EscrowService
 {
-    public function __construct(private readonly AuditLogger $audit) {}
+    public function __construct(private readonly AuditLogger $audit, private readonly SmsNotifier $sms) {}
 
     public function isEnabled(): bool
     {
@@ -157,6 +157,10 @@ class EscrowService
             'commission' => (float) $holding->commission_amount,
         ], "Released {$holding->reference} to the seller ({$reason})", $actor);
 
+        if ($seller = $holding->seller) {
+            $this->sms->escrowReleased($holding, $seller);
+        }
+
         return $holding;
     }
 
@@ -290,6 +294,10 @@ class EscrowService
         });
 
         $this->audit->record('payout.paid', $payout, ['amount' => (float) $payout->amount], "Marked payout {$payout->reference} as paid", $actor);
+
+        if ($seller = $payout->seller) {
+            $this->sms->payoutPaid($payout, $seller);
+        }
 
         return $payout->refresh();
     }
