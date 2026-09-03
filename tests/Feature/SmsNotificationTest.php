@@ -57,6 +57,28 @@ test('placing an order sends the buyer an SMS in the exact shape AutoFaya expect
     });
 });
 
+test('the message body names the platform even when the sender ID is something else', function () {
+    Http::fake(['api.autofaya.com/*' => Http::response([], 200)]);
+    // Operators often issue a short or shared sender ID, so the body has to say
+    // who is actually texting.
+    enableSms('AUTOFAYA');
+
+    app(OrderNotifier::class)->orderPlaced(smsOrder());
+
+    Http::assertSent(fn ($request) => $request['sender_name'] === 'AUTOFAYA'
+        && str_contains($request['message'], 'Antenkayume'));
+});
+
+test('a shop that has set its own business name is signed with that instead', function () {
+    Http::fake(['api.autofaya.com/*' => Http::response([], 200)]);
+    enableSms('AUTOFAYA');
+    Setting::putGeneral(['businessName' => 'Antenkayume Marketplace']);
+
+    app(OrderNotifier::class)->orderPlaced(smsOrder());
+
+    Http::assertSent(fn ($request) => str_contains($request['message'], 'Antenkayume Marketplace'));
+});
+
 test('no SMS leaves the platform while the master switch is off', function () {
     Http::fake();
     config(['services.autofaya.api_key' => 'af_live_testkey']);

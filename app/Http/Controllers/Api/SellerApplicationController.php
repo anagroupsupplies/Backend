@@ -49,7 +49,7 @@ class SellerApplicationController extends Controller
         abort_if($existing && $existing->status === SellerApplication::STATUS_PENDING, 422, 'Your application is already being reviewed.');
         abort_if($existing && $existing->status === SellerApplication::STATUS_APPROVED, 422, 'Your application has already been approved.');
 
-        $data = $this->validated($request);
+        $data = $this->validated($request, $existing);
 
         // Where more information was requested, the applicant edits the same
         // application rather than opening a second one.
@@ -232,8 +232,12 @@ class SellerApplicationController extends Controller
     }
 
     /** @return array<string, mixed> */
-    private function validated(Request $request): array
+    private function validated(Request $request, ?SellerApplication $existing = null): array
     {
+        // An applicant correcting their submission keeps the document already
+        // on file unless they deliberately upload a replacement.
+        $documentHeld = (bool) $existing?->id_document_path;
+
         return $request->validate([
             'fullName' => ['required', 'string', 'max:255'],
             'businessName' => ['required', 'string', 'max:255'],
@@ -253,7 +257,7 @@ class SellerApplicationController extends Controller
             'logoUrl' => ['nullable', 'string', 'max:2048'],
             'idDocumentType' => ['required', Rule::in(SellerApplication::ID_TYPES)],
             'idNumber' => ['required', 'string', 'max:60'],
-            'idDocumentPath' => ['required', 'string', 'max:2048'],
+            'idDocumentPath' => [$documentHeld ? 'nullable' : 'required', 'string', 'max:2048'],
             'businessDocumentPath' => ['nullable', 'string', 'max:2048'],
             // Explicit, auditable consent rather than a silently checked box.
             'acceptTerms' => ['required', 'accepted'],
@@ -275,6 +279,14 @@ class SellerApplicationController extends Controller
             'logoUrl' => 'logo_url', 'idDocumentType' => 'id_document_type', 'idNumber' => 'id_number',
             'idDocumentPath' => 'id_document_path', 'businessDocumentPath' => 'business_document_path',
         ];
+
+        // A form that simply echoes back a blank upload field must not erase the
+        // document already held for this application.
+        foreach (['idDocumentPath', 'businessDocumentPath'] as $document) {
+            if (trim((string) ($data[$document] ?? '')) === '') {
+                unset($data[$document]);
+            }
+        }
 
         $attributes = [];
         foreach (['phone', 'region', 'city'] as $key) {
@@ -326,6 +338,11 @@ class SellerApplicationController extends Controller
             'payoutBank' => $a->payout_bank,
             'logoUrl' => $a->logo_url,
             'idDocumentType' => $a->id_document_type,
+            'idNumber' => $a->id_number,
+            // The scan itself is never exposed, but the applicant must know one
+            // is already on file or they cannot resubmit without re-uploading.
+            'hasIdDocument' => (bool) $a->id_document_path,
+            'hasBusinessDocument' => (bool) $a->business_document_path,
         ];
 
         if (! $forAdmin) {
@@ -335,9 +352,6 @@ class SellerApplicationController extends Controller
         return [
             ...$base,
             'applicant' => $a->user ? ['id' => (string) $a->user->id, 'name' => $a->user->name, 'email' => $a->user->email] : null,
-            'idNumber' => $a->id_number,
-            'hasIdDocument' => (bool) $a->id_document_path,
-            'hasBusinessDocument' => (bool) $a->business_document_path,
             'termsAcceptedAt' => $a->terms_accepted_at,
             'reviewedBy' => $a->reviewer?->name,
         ];

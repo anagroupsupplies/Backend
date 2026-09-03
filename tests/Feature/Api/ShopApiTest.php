@@ -1645,6 +1645,59 @@ test('requesting more information lets the applicant edit and resubmit the same 
         ->and($application->review_notes)->toBeNull();
 });
 
+test('an applicant resubmits with only the fields the API gives their form back', function () {
+    Notification::fake();
+    $admin = User::factory()->create(['role' => 'admin']);
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertCreated();
+    $application = SellerApplication::firstOrFail();
+    $storedDocument = $application->id_document_path;
+
+    $this->actingAs($admin)->postJson("/api/v1/admin/seller-applications/{$application->id}/request-information", ['notes' => 'Please confirm your TIN.'])->assertOk();
+
+    // Exactly what the applicant's own form is prefilled from.
+    $echoed = $this->actingAs($buyer)->getJson('/api/v1/seller-application')->assertOk()->json('data');
+    expect($echoed['idNumber'])->not->toBeNull()
+        ->and($echoed['hasIdDocument'])->toBeTrue();
+
+    $resubmitted = collect($echoed)->only([
+        'fullName', 'businessName', 'productCategory', 'phone', 'alternatePhone', 'region', 'city',
+        'streetAddress', 'businessDescription', 'tinNumber', 'businessRegistrationNumber',
+        'payoutMethod', 'payoutAccountName', 'payoutNumber', 'payoutBank', 'logoUrl',
+        'idDocumentType', 'idNumber',
+    ])->all();
+
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', [
+        ...$resubmitted,
+        // The upload field is empty because the scan is never sent back.
+        'idDocumentPath' => '',
+        'acceptTerms' => true,
+    ])->assertCreated();
+
+    // Resubmitting did not lose the identity document already on file.
+    expect($application->refresh()->status)->toBe('pending')
+        ->and($application->id_document_path)->toBe($storedDocument);
+});
+
+test('a first application still demands an identity document', function () {
+    $buyer = User::factory()->create();
+
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload(['idDocumentPath' => '']))
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('idDocumentPath');
+});
+
+test('the applicants own view never leaks the path to their identity scan', function () {
+    Notification::fake();
+    $buyer = User::factory()->create();
+    $this->actingAs($buyer)->postJson('/api/v1/seller-application', applicationPayload())->assertCreated();
+
+    $data = $this->actingAs($buyer)->getJson('/api/v1/seller-application')->assertOk()->json('data');
+
+    expect($data)->not->toHaveKey('idDocumentPath')
+        ->and($data)->not->toHaveKey('businessDocumentPath');
+});
+
 test('only administrators can review applications', function () {
     Notification::fake();
     $buyer = User::factory()->create();

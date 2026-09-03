@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\EscrowHolding;
 use App\Models\Order;
 use App\Models\Payout;
+use App\Models\Setting;
 use App\Models\User;
 use Throwable;
 
@@ -18,6 +19,8 @@ use Throwable;
  */
 class SmsNotifier
 {
+    private const PLATFORM_NAME = 'Antenkayume';
+
     public function __construct(private readonly AutoFayaSmsService $sms) {}
 
     /** Confirms to the buyer that the order actually landed. */
@@ -101,9 +104,18 @@ class SmsNotifier
         return $order->shipping_details['phone'] ?? $order->user?->phone;
     }
 
+    /**
+     * The platform name signed at the end of every message.
+     *
+     * Deliberately not the AutoFaya sender name: that is an operator-registered
+     * header, often shortened or shared, so the body must still tell the
+     * customer who is actually texting them.
+     */
     private function shopName(): string
     {
-        return $this->sms->senderName();
+        $name = trim((string) (Setting::general()['businessName'] ?? ''));
+
+        return $name !== '' ? $name : self::PLATFORM_NAME;
     }
 
     private function money(mixed $amount): string
