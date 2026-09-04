@@ -18,17 +18,29 @@ use Illuminate\Support\Str;
 
 class CatalogController extends Controller
 {
+    public function __construct(private readonly AuditLogger $audit) {}
+
     public function products(Request $request): JsonResponse
     {
         $query = Product::query()->with(['category', 'shop'])->where('is_active', true);
         $query->when($request->string('category')->isNotEmpty(), fn ($q) => $q->whereHas('category', fn ($c) => $c->where('slug', $request->string('category'))->orWhere('id', $request->input('category'))));
         $query->when($request->string('seller')->isNotEmpty(), fn ($q) => $q->where('seller_id', $request->input('seller')));
         $query->when($request->string('shop')->isNotEmpty(), fn ($q) => $q->whereHas('shop', fn ($s) => $s->where('slug', $request->input('shop'))->orWhere('id', $request->input('shop'))));
+        $query->when($request->string('condition')->isNotEmpty(), function ($q) use ($request) {
+            $condition = $request->string('condition')->value();
+            if ($condition === 'used') {
+                $q->where(function ($w) {
+                    $w->where('condition', 'like', 'used%')->orWhere('condition', 'refurbished');
+                });
+            } else {
+                $q->where('condition', $condition);
+            }
+        });
         $query->when($request->string('search')->isNotEmpty(), fn ($q) => $this->applySearch($q, (string) $request->input('search')));
         $query->when($request->boolean('featured'), fn ($q) => $q->where('featured', true));
 
         $version = (int) Cache::get('catalog_version', 1);
-        $cacheKey = "products_list:v{$version}:".md5(json_encode($request->only(['category', 'seller', 'shop', 'search', 'featured'])));
+        $cacheKey = "products_list:v{$version}:".md5(json_encode($request->only(['category', 'seller', 'shop', 'condition', 'search', 'featured'])));
 
         return response()->json(['data' => Cache::remember($cacheKey, 60, fn () => $query->latest()->get()->map(fn (Product $product) => $this->productData($product))->all())]);
     }
@@ -59,6 +71,16 @@ class CatalogController extends Controller
 
         $query->when($request->filled('search'), fn ($q) => $this->applySearch($q, (string) $request->input('search')));
         $query->when($request->filled('category'), fn ($q) => $q->where('category_id', $request->input('category')));
+        $query->when($request->filled('condition'), function ($q) use ($request) {
+            $condition = (string) $request->input('condition');
+            if ($condition === 'used') {
+                $q->where(function ($w) {
+                    $w->where('condition', 'like', 'used%')->orWhere('condition', 'refurbished');
+                });
+            } else {
+                $q->where('condition', $condition);
+            }
+        });
         $query->when($request->input('status') === 'active', fn ($q) => $q->where('is_active', true));
         $query->when($request->input('status') === 'inactive', fn ($q) => $q->where('is_active', false));
         $query->when($request->input('status') === 'low_stock', fn ($q) => $q->where('stock', '<=', 5));
@@ -74,8 +96,6 @@ class CatalogController extends Controller
 
         return response()->json(['data' => $query->get()->map(fn (Product $product) => $this->productData($product))]);
     }
-
-    public function __construct(private readonly AuditLogger $audit) {}
 
     public function store(Request $request): JsonResponse
     {
@@ -172,15 +192,43 @@ class CatalogController extends Controller
     /** @return array<string, mixed> */
     private function validatedProduct(Request $request, bool $updating = false): array
     {
-        $rules = ['name' => [$updating ? 'sometimes' : 'required', 'string', 'max:255'], 'categoryId' => ['nullable', 'exists:categories,id'], 'category' => ['nullable', 'string', 'max:255'], 'groupId' => ['nullable', 'exists:product_groups,id'], 'description' => ['nullable', 'string'], 'price' => [$updating ? 'sometimes' : 'required', 'numeric', 'min:0'], 'stock' => ['nullable', 'integer', 'min:0'], 'image' => ['nullable', 'string'],             'images' => ['nullable', 'array', 'max:4'], 'images.*' => ['string'], 'video' => ['nullable', 'array'], 'video.url' => ['nullable', 'string'], 'video.thumbnail' => ['nullable', 'string'], 'sizes' => ['nullable', 'array'], 'sizingType' => ['nullable', 'string'], 'featured' => ['nullable', 'boolean'], 'isActive' => ['nullable', 'boolean'], 'sellerId' => ['nullable', 'exists:users,id'], 'shopId' => ['nullable', 'exists:shops,id']];
+        $rules = [
+            'name' => [$updating ? 'sometimes' : 'required', 'string', 'max:255'],
+            'categoryId' => ['nullable', 'exists:categories,id'],
+            'category' => ['nullable', 'string', 'max:255'],
+            'groupId' => ['nullable', 'exists:product_groups,id'],
+            'description' => ['nullable', 'string'],
+            'condition' => ['nullable', 'string', 'in:new,used,used_like_new,used_good,used_fair,refurbished'],
+            'conditionDetails' => ['nullable', 'string', 'max:1000'],
+            'price' => [$updating ? 'sometimes' : 'required', 'numeric', 'min:0'],
+            'stock' => ['nullable', 'integer', 'min:0'],
+            'image' => ['nullable', 'string'],
+            'images' => ['nullable', 'array', 'max:4'],
+            'images.*' => ['string'],
+            'video' => ['nullable', 'array'],
+            'video.url' => ['nullable', 'string'],
+            'video.thumbnail' => ['nullable', 'string'],
+            'sizes' => ['nullable', 'array'],
+            'variants' => ['nullable', 'array'],
+            'variants.*.name' => ['required_with:variants', 'string', 'max:100'],
+            'variants.*.price' => ['nullable', 'numeric', 'min:0'],
+            'variants.*.stock' => ['nullable', 'integer', 'min:0'],
+            'variants.*.sku' => ['nullable', 'string', 'max:50'],
+            'specifications' => ['nullable', 'array'],
+            'sizingType' => ['nullable', 'string'],
+            'featured' => ['nullable', 'boolean'],
+            'isActive' => ['nullable', 'boolean'],
+            'sellerId' => ['nullable', 'exists:users,id'],
+            'shopId' => ['nullable', 'exists:shops,id'],
+        ];
         $data = $request->validate($rules);
         $mapped = [];
-        foreach (['name', 'description', 'price', 'stock', 'image', 'images', 'video', 'sizes', 'featured'] as $key) {
+        foreach (['name', 'description', 'price', 'stock', 'image', 'images', 'video', 'sizes', 'variants', 'specifications', 'condition', 'featured'] as $key) {
             if (array_key_exists($key, $data)) {
                 $mapped[$key] = $data[$key];
             }
         }
-        foreach (['categoryId' => 'category_id', 'groupId' => 'product_group_id', 'sizingType' => 'sizing_type', 'isActive' => 'is_active', 'sellerId' => 'seller_id', 'shopId' => 'shop_id'] as $from => $to) {
+        foreach (['categoryId' => 'category_id', 'groupId' => 'product_group_id', 'conditionDetails' => 'condition_details', 'sizingType' => 'sizing_type', 'isActive' => 'is_active', 'sellerId' => 'seller_id', 'shopId' => 'shop_id'] as $from => $to) {
             if (array_key_exists($from, $data)) {
                 $mapped[$to] = $data[$from];
             }
@@ -220,7 +268,7 @@ class CatalogController extends Controller
         if ($useFullText) {
             // Strip the boolean-mode operators so a stray + or - cannot break
             // the query or be used to probe the index.
-            $sanitised = preg_replace('/[+\-><()~*"@]+/', ' ', $term) ?? '';
+            $sanitised = preg_replace('/[+\-><()~*\"@]+/', ' ', $term) ?? '';
             $words = array_filter(explode(' ', $sanitised));
 
             if ($words !== []) {
@@ -236,7 +284,34 @@ class CatalogController extends Controller
     /** @return array<string, mixed> */
     private function productData(Product $product): array
     {
-        return ['id' => (string) $product->id, 'slug' => $product->slug, 'sellerId' => $product->seller_id ? (string) $product->seller_id : null, 'shopId' => $product->shop_id ? (string) $product->shop_id : null, 'shopName' => $product->shop?->name, 'shopSlug' => $product->shop?->slug, 'name' => $product->name, 'description' => $product->description, 'price' => (float) $product->price, 'stock' => $product->stock, 'image' => $product->image, 'images' => $product->images, 'video' => $product->video, 'sizes' => $product->sizes, 'sizingType' => $product->sizing_type, 'featured' => $product->featured, 'isActive' => $product->is_active, 'category' => $product->category?->name, 'categoryId' => $product->category_id ? (string) $product->category_id : null, 'groupId' => $product->product_group_id ? (string) $product->product_group_id : null, 'createdAt' => $product->created_at, ...($product->data ?? [])];
+        return [
+            'id' => (string) $product->id,
+            'slug' => $product->slug,
+            'sellerId' => $product->seller_id ? (string) $product->seller_id : null,
+            'shopId' => $product->shop_id ? (string) $product->shop_id : null,
+            'shopName' => $product->shop?->name,
+            'shopSlug' => $product->shop?->slug,
+            'name' => $product->name,
+            'description' => $product->description,
+            'condition' => $product->condition ?? ($product->data['condition'] ?? 'new'),
+            'conditionDetails' => $product->condition_details ?? ($product->data['conditionDetails'] ?? null),
+            'price' => (float) $product->price,
+            'stock' => $product->stock,
+            'image' => $product->image,
+            'images' => $product->images,
+            'video' => $product->video,
+            'sizes' => $product->sizes,
+            'variants' => $product->variants ?? ($product->data['variants'] ?? []),
+            'specifications' => $product->specifications ?? ($product->data['specifications'] ?? []),
+            'sizingType' => $product->sizing_type,
+            'featured' => $product->featured,
+            'isActive' => $product->is_active,
+            'category' => $product->category?->name,
+            'categoryId' => $product->category_id ? (string) $product->category_id : null,
+            'groupId' => $product->product_group_id ? (string) $product->product_group_id : null,
+            'createdAt' => $product->created_at,
+            ...($product->data ?? []),
+        ];
     }
 
     /** @return array<string, mixed> */

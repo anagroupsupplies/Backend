@@ -10,7 +10,17 @@ class Product extends Model
 
     protected function casts(): array
     {
-        return ['price' => 'decimal:2', 'images' => 'array', 'video' => 'array', 'sizes' => 'array', 'data' => 'array', 'featured' => 'boolean', 'is_active' => 'boolean'];
+        return [
+            'price' => 'decimal:2',
+            'images' => 'array',
+            'video' => 'array',
+            'sizes' => 'array',
+            'variants' => 'array',
+            'specifications' => 'array',
+            'data' => 'array',
+            'featured' => 'boolean',
+            'is_active' => 'boolean',
+        ];
     }
 
     /**
