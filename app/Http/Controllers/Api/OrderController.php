@@ -88,6 +88,9 @@ class OrderController extends Controller
             return $order->load('items');
         });
 
+        // Invalidate public catalog cache immediately since inventory counts changed
+        CatalogController::invalidateCatalogCache();
+
         if ($validated['saveAddress'] ?? false) {
             $this->saveAddressForReuse($request, $shipping, $location, $validated['addressLabel'] ?? null);
         }

@@ -27,9 +27,10 @@ class CatalogController extends Controller
         $query->when($request->string('search')->isNotEmpty(), fn ($q) => $this->applySearch($q, (string) $request->input('search')));
         $query->when($request->boolean('featured'), fn ($q) => $q->where('featured', true));
 
-        $cacheKey = 'products_list:'.md5(json_encode($request->only(['category', 'seller', 'shop', 'search', 'featured'])));
+        $version = (int) Cache::get('catalog_version', 1);
+        $cacheKey = "products_list:v{$version}:".md5(json_encode($request->only(['category', 'seller', 'shop', 'search', 'featured'])));
 
-        return response()->json(['data' => Cache::remember($cacheKey, 30, fn () => $query->latest()->get()->map(fn (Product $product) => $this->productData($product))->all())]);
+        return response()->json(['data' => Cache::remember($cacheKey, 60, fn () => $query->latest()->get()->map(fn (Product $product) => $this->productData($product))->all())]);
     }
 
     public function product(Product $product): JsonResponse
@@ -56,7 +57,22 @@ class CatalogController extends Controller
             $query->where('seller_id', $request->user()->id);
         }
 
-        return response()->json(['data' => $query->latest()->get()->map(fn (Product $product) => $this->productData($product))]);
+        $query->when($request->filled('search'), fn ($q) => $this->applySearch($q, (string) $request->input('search')));
+        $query->when($request->filled('category'), fn ($q) => $q->where('category_id', $request->input('category')));
+        $query->when($request->input('status') === 'active', fn ($q) => $q->where('is_active', true));
+        $query->when($request->input('status') === 'inactive', fn ($q) => $q->where('is_active', false));
+        $query->when($request->input('status') === 'low_stock', fn ($q) => $q->where('stock', '<=', 5));
+
+        match ($request->input('sort')) {
+            'oldest' => $query->oldest(),
+            'price_asc' => $query->orderBy('price', 'asc'),
+            'price_desc' => $query->orderBy('price', 'desc'),
+            'stock_asc' => $query->orderBy('stock', 'asc'),
+            'stock_desc' => $query->orderBy('stock', 'desc'),
+            default => $query->latest(),
+        };
+
+        return response()->json(['data' => $query->get()->map(fn (Product $product) => $this->productData($product))]);
     }
 
     public function __construct(private readonly AuditLogger $audit) {}
@@ -262,12 +278,21 @@ class CatalogController extends Controller
         abort_unless($user && ($user->isAdmin() || $user->ownsProduct($product)), 403, 'You can only manage products that belong to your shop.');
     }
 
-    private function clearCache(?int $productId = null): void
+    public static function invalidateCatalogCache(?int $productId = null): void
     {
-        Cache::forget('products_list');
+        if (Cache::has('catalog_version')) {
+            Cache::increment('catalog_version');
+        } else {
+            Cache::forever('catalog_version', 2);
+        }
         Cache::forget('categories');
         if ($productId !== null) {
             Cache::forget("product:{$productId}");
         }
+    }
+
+    private function clearCache(?int $productId = null): void
+    {
+        self::invalidateCatalogCache($productId);
     }
 }
