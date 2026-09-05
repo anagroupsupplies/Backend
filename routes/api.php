@@ -88,8 +88,7 @@ Route::prefix('v1')->group(function (): void {
         Route::prefix('admin')->middleware('admin')->name('admin.')->group(function (): void {
             Route::get('dashboard', [AdminController::class, 'dashboard']);
             Route::get('products', [CatalogController::class, 'manageableProducts']);
-            Route::apiResource('products', CatalogController::class)->except(['index', 'show']);
-            Route::post('product-groups', [CatalogController::class, 'storeGroup']);
+            Route::apiResource('products', CatalogController::class)->only(['update', 'destroy']);
             Route::post('categories', [CatalogController::class, 'storeCategory']);
             Route::patch('categories/{category}', [CatalogController::class, 'updateCategory']);
             Route::delete('categories/{category}', [CatalogController::class, 'destroyCategory']);

@@ -1898,3 +1898,24 @@ test('a customer can add a product to cart by id or by slug', function () {
       ->assertJsonPath('data.productId', (string) $product->id)
       ->assertJsonPath('data.quantity', 3);
 });
+
+test('an administrator cannot publish products but can moderate and edit them', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $seller = User::factory()->create(['role' => 'seller']);
+    $product = Product::create(['name' => 'Original Shoe', 'slug' => 'original-shoe-mod', 'price' => 30000, 'stock' => 10, 'seller_id' => $seller->id]);
+
+    // Attempt to publish as admin -> 405 (route removed) or 403
+    $this->actingAs($admin)->postJson('/api/v1/admin/products', [
+        'name' => 'Admin Sneaker',
+        'price' => 50000,
+        'stock' => 5,
+    ])->assertStatus(405);
+
+    // Edit/moderate existing product as admin -> allowed
+    $this->actingAs($admin)->patchJson("/api/v1/admin/products/{$product->id}", [
+        'price' => 35000,
+    ])->assertOk()
+      ->assertJsonPath('data.price', 35000);
+
+    expect((float) $product->refresh()->price)->toBe(35000.0);
+});
