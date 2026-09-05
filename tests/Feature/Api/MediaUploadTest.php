@@ -27,6 +27,18 @@ test('an administrator can upload an image to laravel managed storage', function
     expect($response->json('data.url'))->toContain('/storage/products/');
 });
 
+test('a video can be uploaded to laravel managed storage', function () {
+    $response = $this->postJson('/api/v1/admin/media/video', [
+        'video' => UploadedFile::fake()->create('demo.mp4', 2000, 'video/mp4'),
+    ])->assertCreated()
+        ->assertJsonPath('data.type', 'video')
+        ->assertJsonPath('data.mimeType', 'video/mp4');
+
+    $media = Media::where('type', 'video')->firstOrFail();
+    Storage::disk('public')->assertExists($media->path);
+    expect($response->json('data.url'))->toContain('/storage/products/videos/');
+});
+
 test('deleting media removes its file and database record', function () {
     Storage::disk('public')->put('products/test.jpg', 'image');
     $media = Media::create([
@@ -40,7 +52,7 @@ test('deleting media removes its file and database record', function () {
     expect(Media::count())->toBe(0);
 });
 
-test('non image files are rejected', function () {
+test('non image or video files are rejected', function () {
     $this->postJson('/api/v1/admin/media', [
         'image' => UploadedFile::fake()->create('malware.php', 10, 'text/x-php'),
     ])->assertUnprocessable();
