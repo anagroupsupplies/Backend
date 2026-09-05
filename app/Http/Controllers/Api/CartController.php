@@ -17,13 +17,15 @@ class CartController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $productId = $request->input('productId') ?? $request->input('product_id');
+        abort_if(! $productId, 422, 'The product id is required.');
+
         $data = $request->validate([
-            'productId' => ['required'],
             'quantity' => ['required', 'integer', 'min:1'],
             'selectedSize' => ['nullable', 'string', 'max:100'],
+            'selected_size' => ['nullable', 'string', 'max:100'],
         ]);
 
-        $productId = $data['productId'];
         $product = Product::where('is_active', true)
             ->where(function ($q) use ($productId) {
                 if (is_numeric($productId)) {
@@ -36,7 +38,7 @@ class CartController extends Controller
 
         abort_if(! $product, 422, 'The selected product is invalid.');
 
-        $size = $data['selectedSize'] ?? 'none';
+        $size = $data['selectedSize'] ?? $data['selected_size'] ?? 'none';
         $item = CartItem::firstOrNew(['user_id' => $request->user()->id, 'product_id' => $product->id, 'selected_size' => $size]);
         $item->quantity = min($product->stock, ($item->exists ? $item->quantity : 0) + $data['quantity']);
         abort_if($item->quantity < 1, 422, 'This product is out of stock.');
@@ -67,7 +69,30 @@ class CartController extends Controller
     private function data(CartItem $item): array
     {
         $product = $item->product;
+        if (! $product) {
+            return [
+                'id' => (string) $item->id,
+                'productId' => (string) $item->product_id,
+                'name' => 'Product Unavailable',
+                'price' => 0.0,
+                'quantity' => $item->quantity,
+                'image' => null,
+                'selectedSize' => $item->selected_size,
+                'sizingType' => 'none',
+                'stock' => 0,
+            ];
+        }
 
-        return ['id' => (string) $item->id, 'productId' => (string) $product->id, 'name' => $product->name, 'price' => (float) $product->price, 'quantity' => $item->quantity, 'image' => $product->image, 'selectedSize' => $item->selected_size, 'sizingType' => $product->sizing_type, 'stock' => $product->stock];
+        return [
+            'id' => (string) $item->id,
+            'productId' => (string) $product->id,
+            'name' => $product->name,
+            'price' => (float) $product->price,
+            'quantity' => $item->quantity,
+            'image' => $product->image,
+            'selectedSize' => $item->selected_size,
+            'sizingType' => $product->sizing_type,
+            'stock' => $product->stock,
+        ];
     }
 }
