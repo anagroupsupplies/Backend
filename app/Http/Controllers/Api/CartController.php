@@ -17,8 +17,25 @@ class CartController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $data = $request->validate(['productId' => ['required', 'exists:products,id'], 'quantity' => ['required', 'integer', 'min:1'], 'selectedSize' => ['nullable', 'string', 'max:100']]);
-        $product = Product::where('is_active', true)->findOrFail($data['productId']);
+        $data = $request->validate([
+            'productId' => ['required'],
+            'quantity' => ['required', 'integer', 'min:1'],
+            'selectedSize' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $productId = $data['productId'];
+        $product = Product::where('is_active', true)
+            ->where(function ($q) use ($productId) {
+                if (is_numeric($productId)) {
+                    $q->where('id', (int) $productId)->orWhere('slug', (string) $productId);
+                } else {
+                    $q->where('slug', (string) $productId);
+                }
+            })
+            ->first();
+
+        abort_if(! $product, 422, 'The selected product is invalid.');
+
         $size = $data['selectedSize'] ?? 'none';
         $item = CartItem::firstOrNew(['user_id' => $request->user()->id, 'product_id' => $product->id, 'selected_size' => $size]);
         $item->quantity = min($product->stock, ($item->exists ? $item->quantity : 0) + $data['quantity']);

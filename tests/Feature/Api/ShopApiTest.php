@@ -1879,3 +1879,22 @@ test('a search full of operator characters does not break the query', function (
     $this->getJson('/api/v1/products?search='.urlencode('+-><()~*"@'))->assertOk();
     $this->getJson('/api/v1/products?search='.urlencode('samsung*'))->assertOk();
 });
+
+test('a customer can add a product to cart by id or by slug', function () {
+    $user = User::factory()->create();
+    $product = Product::create(['name' => 'Canvas Sneakers', 'slug' => 'canvas-sneakers-cart1', 'price' => 30000, 'stock' => 10]);
+
+    $this->actingAs($user)->postJson('/api/v1/cart', [
+        'productId' => 'canvas-sneakers-cart1',
+        'quantity' => 2,
+    ])->assertCreated()
+      ->assertJsonPath('data.productId', (string) $product->id)
+      ->assertJsonPath('data.quantity', 2);
+
+    $this->actingAs($user)->postJson('/api/v1/cart', [
+        'productId' => $product->id,
+        'quantity' => 1,
+    ])->assertCreated()
+      ->assertJsonPath('data.productId', (string) $product->id)
+      ->assertJsonPath('data.quantity', 3);
+});
