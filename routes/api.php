@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AddressController;
+use App\Http\Controllers\Api\AiIntelligenceController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\AiChatController;
 use App\Http\Controllers\Api\AuditLogController;
@@ -110,6 +111,15 @@ Route::prefix('v1')->group(function (): void {
             Route::get('reviews', [AdminController::class, 'reviews']);
             Route::delete('reviews/{review}', [AdminController::class, 'destroyReview']);
             Route::apiResource('banners', BannerController::class)->except(['index', 'show']);
+
+            Route::prefix('ai')->group(function (): void {
+                Route::get('health', [AiIntelligenceController::class, 'health']);
+                Route::get('recommendations', [AiIntelligenceController::class, 'recommendations']);
+                Route::get('analytics', [AiIntelligenceController::class, 'analytics']);
+                Route::post('generate-description', [AiIntelligenceController::class, 'generateDescription']);
+                Route::get('tickets/{ticket}/suggest-reply', [AiIntelligenceController::class, 'suggestTicketReply']);
+                Route::post('feature-product/{product}', [AiIntelligenceController::class, 'featureProduct']);
+            });
 
             Route::middleware('master')->group(function (): void {
                 Route::get('audit-logs', [AuditLogController::class, 'index']);

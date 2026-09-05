@@ -1947,3 +1947,60 @@ test('a master administrator cannot publish products but can moderate and edit t
 
     expect((float) $product->refresh()->price)->toBe(42000.0);
 });
+
+test('an administrator can query ai system health, recommendations, and analytics', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+
+    $health = $this->actingAs($admin)->getJson('/api/v1/admin/ai/health')
+        ->assertOk()
+        ->assertJsonStructure(['data' => ['score', 'status', 'summary', 'breakdown', 'checks']])
+        ->json('data');
+
+    expect($health['score'])->toBeGreaterThanOrEqual(25)
+        ->and($health['score'])->toBeLessThanOrEqual(100);
+
+    $recs = $this->actingAs($admin)->getJson('/api/v1/admin/ai/recommendations')
+        ->assertOk()
+        ->json('data');
+
+    expect(is_array($recs))->toBeTrue();
+
+    $analytics = $this->actingAs($admin)->getJson('/api/v1/admin/ai/analytics')
+        ->assertOk()
+        ->assertJsonStructure(['data' => ['recentRevenue', 'growthPercent', 'topCategories', 'insights']])
+        ->json('data');
+
+    expect(is_array($analytics['insights']))->toBeTrue();
+});
+
+test('an administrator can generate an ai product description', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+
+    $response = $this->actingAs($admin)->postJson('/api/v1/admin/ai/generate-description', [
+        'name' => 'Men Wireless Earbuds Pro',
+        'category' => 'Electronics',
+        'condition' => 'New',
+        'features' => 'Active noise cancelling, 30-hour battery, water resistant',
+        'targetAudience' => 'Tech enthusiasts and commuters',
+    ])->assertOk();
+
+    expect($response->json('data.description'))->toContain('Men Wireless Earbuds Pro')
+        ->and($response->json('data.description'))->toContain('Key Highlights');
+});
+
+test('an administrator can use ai quick action to feature a product', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $product = Product::create([
+        'name' => 'AI Featured Watch',
+        'slug' => 'ai-featured-watch-123',
+        'price' => 120000,
+        'stock' => 15,
+        'featured' => false,
+    ]);
+
+    $this->actingAs($admin)->postJson("/api/v1/admin/ai/feature-product/{$product->id}")
+        ->assertOk()
+        ->assertJsonPath('data.featured', true);
+
+    expect($product->refresh()->featured)->toBeTrue();
+});
