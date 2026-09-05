@@ -1919,3 +1919,31 @@ test('an administrator cannot publish products but can moderate and edit them', 
 
     expect((float) $product->refresh()->price)->toBe(35000.0);
 });
+
+test('a master administrator cannot publish products but can moderate and edit them', function () {
+    $master = User::factory()->create(['role' => 'master']);
+    $seller = User::factory()->create(['role' => 'seller']);
+    $product = Product::create(['name' => 'Original Shoe Master', 'slug' => 'original-shoe-master-mod', 'price' => 30000, 'stock' => 10, 'seller_id' => $seller->id]);
+
+    // Attempt to publish as master admin on admin route -> 405 (route removed)
+    $this->actingAs($master)->postJson('/api/v1/admin/products', [
+        'name' => 'Master Sneaker',
+        'price' => 50000,
+        'stock' => 5,
+    ])->assertStatus(405);
+
+    // Attempt to publish on seller route as master admin -> 403
+    $this->actingAs($master)->postJson('/api/v1/seller/products', [
+        'name' => 'Master Sneaker',
+        'price' => 50000,
+        'stock' => 5,
+    ])->assertStatus(403);
+
+    // Edit/moderate existing product as master admin -> allowed
+    $this->actingAs($master)->patchJson("/api/v1/admin/products/{$product->id}", [
+        'price' => 42000,
+    ])->assertOk()
+      ->assertJsonPath('data.price', 42000);
+
+    expect((float) $product->refresh()->price)->toBe(42000.0);
+});

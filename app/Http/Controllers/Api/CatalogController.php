@@ -99,7 +99,7 @@ class CatalogController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        abort_if(! $request->user()->isSeller() && $request->user()->isAdmin(), 403, 'Product publishing is reserved for registered sellers. Administrators can moderate and edit existing products.');
+        abort_if($request->user()->isAdmin(), 403, 'Product publishing is reserved for registered sellers. Administrators and master administrators can moderate and edit existing products.');
         $product = Product::create($this->withOwner($request, $this->validatedProduct($request)));
         $this->audit->record('product.created', $product, ['price' => $product->price, 'stock' => $product->stock], "Created the product {$product->name}");
         $this->clearCache();
@@ -109,7 +109,7 @@ class CatalogController extends Controller
 
     public function storeGroup(Request $request): JsonResponse
     {
-        abort_if(! $request->user()->isSeller() && $request->user()->isAdmin(), 403, 'Product publishing is reserved for registered sellers. Administrators can moderate and edit existing products.');
+        abort_if($request->user()->isAdmin(), 403, 'Product publishing is reserved for registered sellers. Administrators and master administrators can moderate and edit existing products.');
         $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'variants' => ['nullable', 'array']]);
         $owner = $this->ownerAttributes($request);
         $group = ProductGroup::create(['name' => $data['name'], ...$owner, 'data' => $request->except('variants')]);
