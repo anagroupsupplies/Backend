@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\MalipoPayWebhookController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ReviewController;
+use App\Http\Controllers\Api\SellerAiController;
 use App\Http\Controllers\Api\SellerApplicationController;
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\ShopController;
@@ -85,6 +86,15 @@ Route::prefix('v1')->group(function (): void {
             Route::post('product-groups', [CatalogController::class, 'storeGroup']);
             Route::post('media/video', [MediaController::class, 'store']);
             Route::apiResource('media', MediaController::class)->only(['index', 'store', 'destroy']);
+
+            Route::prefix('ai')->name('ai.')->group(function (): void {
+                Route::get('analytics', [SellerAiController::class, 'analytics']);
+                Route::get('recommendations', [SellerAiController::class, 'recommendations']);
+                Route::post('generate-product', [SellerAiController::class, 'generateProduct']);
+                Route::post('optimize-pricing', [SellerAiController::class, 'optimizePricing']);
+                Route::post('chat', [SellerAiController::class, 'chat'])->middleware('throttle:30,1');
+                Route::get('ticket-reply/{ticket}', [SellerAiController::class, 'suggestTicketReply']);
+            });
         });
 
         Route::prefix('admin')->middleware('admin')->name('admin.')->group(function (): void {

@@ -363,6 +363,9 @@ PROMPT;
                 if ($response->successful()) {
                     $text = (string) $response->json('choices.0.message.content');
                     if (trim($text) !== '') {
+                        if ($name !== '' && ! str_contains($text, $name)) {
+                            $text = "**{$name}**\n\n".$text;
+                        }
                         return trim($text);
                     }
                 }
