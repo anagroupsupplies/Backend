@@ -76,11 +76,12 @@ class OrderController extends Controller
                 abort_if(! $product || ! $product->is_active || $item->quantity > $product->stock, 422, ($product?->name ?? 'An item').' is out of stock or does not have the requested quantity available.');
                 $item->setRelation('product', $product);
             }
-            $subtotal = $cart->sum(fn (CartItem $item) => (float) $item->product->price * $item->quantity);
+            $subtotal = $cart->sum(fn (CartItem $item) => (float) $item->product->priceForVariant($item->selected_size) * $item->quantity);
             $order = Order::create(['number' => 'ANA-'.now()->format('Ymd').'-'.Str::upper(Str::random(6)), 'user_id' => $request->user()->id, 'subtotal' => $subtotal, 'shipping_total' => 0, 'total' => $subtotal, 'status' => 'pending', 'shipping_details' => $shipping, 'payment_method' => $paymentMethod, 'payment_status' => $payingByMobileMoney ? Order::PAY_STATUS_PROCESSING : Order::PAY_STATUS_PENDING, 'payment_phone' => $payingByMobileMoney ? $this->malipoPay->normalisePhone($paymentPhone) : null, 'delivery_latitude' => $location['latitude'] ?? null, 'delivery_longitude' => $location['longitude'] ?? null, 'delivery_accuracy' => $location['accuracy'] ?? null]);
             foreach ($cart as $item) {
                 $product = $item->product;
-                $order->items()->create(['product_id' => $product->id, 'seller_id' => $product->seller_id, 'shop_id' => $product->shop_id, 'name' => $product->name, 'unit_price' => $product->price, 'quantity' => $item->quantity, 'selected_size' => $item->selected_size, 'sizing_type' => $product->sizing_type, 'image' => $product->image, 'product_snapshot' => ['id' => $product->id, 'sellerId' => $product->seller_id, 'shopId' => $product->shop_id, 'name' => $product->name, 'price' => $product->price]]);
+                $unitPrice = $product->priceForVariant($item->selected_size);
+                $order->items()->create(['product_id' => $product->id, 'seller_id' => $product->seller_id, 'shop_id' => $product->shop_id, 'name' => $product->name, 'unit_price' => $unitPrice, 'quantity' => $item->quantity, 'selected_size' => $item->selected_size, 'sizing_type' => $product->sizing_type, 'image' => $product->image, 'product_snapshot' => ['id' => $product->id, 'sellerId' => $product->seller_id, 'shopId' => $product->shop_id, 'name' => $product->name, 'price' => $unitPrice]]);
                 $product->decrement('stock', $item->quantity);
             }
             CartItem::where('user_id', $request->user()->id)->delete();

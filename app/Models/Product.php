@@ -41,6 +41,22 @@ class Product extends Model
             ?? (ctype_digit((string) $value) ? $this->whereKey($value)->first() : null);
     }
 
+    /**
+     * Resolve the active price for this product, taking into account variant overrides.
+     */
+    public function priceForVariant(?string $variantName): float
+    {
+        if ($variantName && ! empty($this->variants) && is_array($this->variants)) {
+            foreach ($this->variants as $variant) {
+                if (isset($variant['name']) && (string) $variant['name'] === (string) $variantName && isset($variant['price']) && is_numeric($variant['price'])) {
+                    return (float) $variant['price'];
+                }
+            }
+        }
+
+        return (float) $this->price;
+    }
+
     public function category()
     {
         return $this->belongsTo(Category::class);

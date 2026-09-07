@@ -87,7 +87,7 @@ class CartController extends Controller
             'id' => (string) $item->id,
             'productId' => (string) $product->id,
             'name' => $product->name,
-            'price' => (float) $product->price,
+            'price' => $product->priceForVariant($item->selected_size),
             'quantity' => $item->quantity,
             'image' => $product->image,
             'selectedSize' => $item->selected_size,
